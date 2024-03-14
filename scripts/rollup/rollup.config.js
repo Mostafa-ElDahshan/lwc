@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2023, salesforce.com, inc.
+ * Copyright (c) 2024, Salesforce, Inc.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
@@ -14,16 +14,33 @@ const { rollup } = require('rollup');
 const replace = require('@rollup/plugin-replace');
 const typescript = require('@rollup/plugin-typescript');
 const { nodeResolve } = require('@rollup/plugin-node-resolve');
-const commonjs = require('@rollup/plugin-commonjs');
 
 // The assumption is that the build script for each sub-package runs in that sub-package's directory
 const packageRoot = process.cwd();
 const packageJson = JSON.parse(readFileSync(path.resolve(packageRoot, './package.json'), 'utf-8'));
 const { name: packageName, version, dependencies, peerDependencies } = packageJson;
-const banner = `/**\n * Copyright (C) 2023 salesforce.com, inc.\n */`;
-const footer = `/** version: ${version} */`;
+// This copyright text should match the text in the header/header eslint rule
+let banner = `/**\n * Copyright (c) ${new Date().getFullYear()} Salesforce, Inc.\n */`;
+let footer = `/** version: ${version} */`;
 const { ROLLUP_WATCH: watchMode } = process.env;
 const formats = ['es', 'cjs'];
+
+if (packageName === '@lwc/synthetic-shadow') {
+    // Here we wrap all of synthetic shadow in a check for lwcRuntimeFlags.ENABLE_FORCE_SHADOW_MIGRATE_MODE, so
+    // that synthetic shadow is not loaded at all if the flag is in effect.
+    // Note that lwcRuntimeFlags must be referenced as a pure global, or else string replacement in ESBuild
+    // will not work. But we also have to check to make sure that lwcRuntimeFlags is defined, so this
+    // `Object.defineProperty` code is copied from @lwc/features itself.
+    banner += `
+    if (!globalThis.lwcRuntimeFlags) {
+      Object.defineProperty(globalThis, 'lwcRuntimeFlags', { value: Object.create(null) });
+    }
+    if (!lwcRuntimeFlags.ENABLE_FORCE_SHADOW_MIGRATE_MODE) {
+    `
+        .replaceAll(/\n {4}/g, '\n')
+        .trimEnd();
+    footer += '\n}';
+}
 
 const onwarn = ({ code, message }) => {
     if (!process.env.ROLLUP_WATCH && code !== 'CIRCULAR_DEPENDENCY') {
@@ -41,7 +58,6 @@ function sharedPlugins() {
 
     return [
         typescript({
-            target: 'es2017',
             tsconfig: path.join(packageRoot, 'tsconfig.json'),
             noEmitOnError: !watchMode, // in watch mode, do not exit with an error if typechecking fails
             ...(watchMode && {
@@ -133,21 +149,15 @@ module.exports = {
     plugins: [
         nodeResolve({
             // These are the devDeps that may be inlined into the dist/ bundles
-            // These include packages owned by us (LWC, observable-membrane), as well as parse5,
-            // which is bundled because it makes it simpler to distribute
+            // These include packages owned by us (LWC, observable-membrane), as well as parse5
+            // and its single dependency, which are bundled because it makes it simpler to distribute
             resolveOnly: [
                 /^@lwc\//,
                 'observable-membrane',
-                // Special case - parse5 is bundled only in @lwc/engine-server currently, to avoid
-                // issues with Best/Tachometer.
-                // We can probably remove this special case when we upgrade parse5 to the ESM version, and bundle it
-                // into @lwc/template-compiler as well (to avoid shipping breaking ESM changes to consumers).
-                packageName === '@lwc/engine-server' && 'parse5',
-            ].filter(Boolean),
-        }),
-        // TODO [#3451]: remove this once we upgrade parse5 to its ESM version
-        commonjs({
-            include: [/\/parse5\//],
+                /^parse5($|\/)/,
+                'entities',
+                /^@parse5\/tools/,
+            ],
         }),
         ...sharedPlugins(),
         injectInlineRenderer(),

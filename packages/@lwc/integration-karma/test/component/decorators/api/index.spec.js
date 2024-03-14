@@ -10,6 +10,7 @@ import Reactivity from 'x/reactivity';
 import Methods from 'x/methods';
 import Inheritance from 'x/inheritance';
 import NullInitialValue from 'x/nullInitialValue';
+import ExtendsMixin from 'x/extendsMixin';
 
 import duplicatePropertyTemplate from 'x/duplicatePropertyTemplate';
 import NoSetter from 'x/noSetter';
@@ -20,7 +21,9 @@ describe('properties', () => {
         document.body.appendChild(elm);
 
         expect(elm.publicProp).toBeDefined();
-        expect(elm.privateProp).toBeUndefined();
+        expect(() => {
+            expect(elm.privateProp).toBeUndefined();
+        }).toLogWarningDev(/Add the @api annotation to the property declaration/);
     });
 
     it('should make the public property reactive if used in the template', () => {
@@ -80,7 +83,9 @@ describe('methods', () => {
         const elm = createElement('x-methods', { is: Methods });
 
         expect(elm.publicMethod).toBeDefined();
-        expect(elm.privateMethod).toBeUndefined();
+        expect(() => {
+            expect(elm.privateMethod).toBeUndefined();
+        }).toLogWarningDev(/Add the @api annotation to the property declaration/);
     });
 
     it('should invoke the method with the right this value and arguments', () => {
@@ -94,20 +99,34 @@ describe('methods', () => {
 });
 
 describe('inheritance', () => {
-    it('should inherit the public props from the base class', () => {
-        const elm = createElement('x-inheritance', { is: Inheritance });
+    const cases = [
+        {
+            type: 'normal',
+            Component: Inheritance,
+        },
+        {
+            type: 'mixin',
+            Component: ExtendsMixin,
+        },
+    ];
+    cases.forEach(({ type, Component }) => {
+        describe(type, () => {
+            it('should inherit the public props from the base class', () => {
+                const elm = createElement('x-inheritance', { is: Component });
 
-        expect(elm.base).toBe('base');
-        expect(elm.child).toBe('child');
-        expect(elm.overridden).toBe('overridden - child');
-    });
+                expect(elm.base).toBe('base');
+                expect(elm.child).toBe('child');
+                expect(elm.overridden).toBe('overridden - child');
+            });
 
-    it('should inherit the public methods from the base class', () => {
-        const elm = createElement('x-inheritance', { is: Inheritance });
+            it('should inherit the public methods from the base class', () => {
+                const elm = createElement('x-inheritance', { is: Component });
 
-        expect(elm.baseMethod()).toBe('base');
-        expect(elm.childMethod()).toBe('child');
-        expect(elm.overriddenMethod()).toBe('overridden - child');
+                expect(elm.baseMethod()).toBe('base');
+                expect(elm.childMethod()).toBe('child');
+                expect(elm.overriddenMethod()).toBe('overridden - child');
+            });
+        });
     });
 });
 
@@ -177,7 +196,7 @@ describe('non-LightningElement `this` when calling accessor', () => {
     });
 
     const expectedErrorMessage =
-        /(undefined is not an object|Right side of assignment cannot be destructured|vm is undefined|undefined is not a VM|Cannot destructure property '(getHook|setHook)'|Cannot read properties of undefined)/;
+        /(undefined has no properties|undefined is not an object|Right side of assignment cannot be destructured|vm is undefined|undefined is not a VM|Cannot destructure property '(getHook|setHook)'|Cannot read properties of undefined)/;
 
     const scenarios = [
         { type: 'getterSetter', prop: 'getterSetterProp' },

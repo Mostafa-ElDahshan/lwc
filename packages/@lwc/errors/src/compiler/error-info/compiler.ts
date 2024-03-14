@@ -1,20 +1,20 @@
 /*
- * Copyright (c) 2018, salesforce.com, inc.
+ * Copyright (c) 2024, Salesforce, Inc.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
  */
 import { DiagnosticLevel } from '../../shared/types';
 
-/**
- * TODO [W-5678919]: implement script to determine the next available error code
- * In the meantime, reference and the update the value at src/compiler/error-info/index.ts
+/*
+ * For the next available error code, reference (and update!) the value in ./index.ts
  */
 
 export const GENERIC_COMPILER_ERROR = {
     code: 1001,
     message: 'Unexpected compilation error: {0}',
     level: DiagnosticLevel.Error,
+    url: '',
 };
 
 export const CompilerValidationErrors = {
@@ -60,25 +60,10 @@ export const CompilerValidationErrors = {
         url: '',
     },
 
-    INVALID_RESOLUTION_PROPERTY: {
-        code: 1020,
-        message:
-            'Expected an object for stylesheetConfig.customProperties.resolution, received "{0}".',
-        level: DiagnosticLevel.Error,
-        url: '',
-    },
-
     INVALID_SOURCEMAP_PROPERTY: {
         code: 1021,
-        message: 'Expected a boolean value for outputConfig.sourcemap, received "{0}".',
-        level: DiagnosticLevel.Error,
-        url: '',
-    },
-
-    INVALID_TYPE_PROPERTY: {
-        code: 1022,
         message:
-            'Expected either "native" or "module" for stylesheetConfig.customProperties.resolution.type, received "{0}".',
+            'Expected a boolean value or \'inline\' for outputConfig.sourcemap, received "{0}".',
         level: DiagnosticLevel.Error,
         url: '',
     },
@@ -211,6 +196,14 @@ export const TransformerErrors = {
     NO_AVAILABLE_TRANSFORMER: {
         code: 1005,
         message: 'No available transformer for "{0}"',
+        level: DiagnosticLevel.Error,
+        url: '',
+    },
+
+    JS_TRANSFORMER_DECORATOR_ERROR: {
+        code: 1198,
+        message:
+            'Decorators like @api, @track, and @wire are only supported in LightningElement classes. {0}',
         level: DiagnosticLevel.Error,
         url: '',
     },

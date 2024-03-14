@@ -9,11 +9,12 @@ import {
     assert,
     create,
     isArray,
-    isFunction,
     isNull,
     isTrue,
     isUndefined,
     KEY__SCOPED_CSS,
+    keys,
+    noop,
     toString,
 } from '@lwc/shared';
 
@@ -51,6 +52,9 @@ export interface Template {
     stylesheets?: TemplateStylesheetFactories;
     /** The string used for synthetic shadow style scoping and light DOM style scoping. */
     stylesheetToken?: string;
+    /** Same as the above, but for legacy use cases (pre-LWC v3.0.0) */
+    // TODO [#3733]: remove support for legacy scope tokens
+    legacyStylesheetToken?: string;
     /** Render mode for the template. Could be light or undefined (which means it's shadow) */
     renderMode?: 'light';
     /** True if this template contains template refs, undefined or false otherwise */
@@ -73,7 +77,6 @@ function validateSlots(vm: VM) {
     const { cmpSlots } = vm;
 
     for (const slotName in cmpSlots.slotAssignments) {
-        // eslint-disable-next-line @lwc/lwc-internal/no-production-assert
         assert.isTrue(
             isArray(cmpSlots.slotAssignments[slotName]),
             `Slots can only be set to an array, instead received ${toString(
@@ -112,20 +115,44 @@ const enum FragmentCache {
     SHADOW_MODE_SYNTHETIC = 1 << 1,
 }
 
+// This should be a no-op outside of LWC's Karma tests, where it's not needed
+let registerFragmentCache: (fragmentCache: any) => void = noop;
+
+// Only used in LWC's Karma tests
+if (process.env.NODE_ENV === 'test-karma-lwc') {
+    // Keep track of fragmentCaches, so we can clear them in LWC's Karma tests
+    const fragmentCaches: any[] = [];
+    registerFragmentCache = (fragmentCache: any) => {
+        fragmentCaches.push(fragmentCache);
+    };
+
+    (window as any).__lwcResetFragmentCaches = () => {
+        for (const fragmentCache of fragmentCaches) {
+            for (const key of keys(fragmentCache)) {
+                delete fragmentCache[key];
+            }
+        }
+    };
+}
+
 function buildParseFragmentFn(
     createFragmentFn: (html: string, renderer: RendererAPI) => Element
 ): (strings: string[], ...keys: number[]) => () => Element {
     return (strings: string[], ...keys: number[]) => {
         const cache = create(null);
 
+        registerFragmentCache(cache);
+
         return function (): Element {
             const {
-                context: { hasScopedStyles, stylesheetToken },
+                context: { hasScopedStyles, stylesheetToken, legacyStylesheetToken },
                 shadowMode,
                 renderer,
             } = getVMBeingRendered()!;
             const hasStyleToken = !isUndefined(stylesheetToken);
             const isSyntheticShadow = shadowMode === ShadowMode.Synthetic;
+            const hasLegacyToken =
+                lwcRuntimeFlags.ENABLE_LEGACY_SCOPE_TOKENS && !isUndefined(legacyStylesheetToken);
 
             let cacheKey = 0;
             if (hasStyleToken && hasScopedStyles) {
@@ -139,10 +166,16 @@ function buildParseFragmentFn(
                 return cache[cacheKey];
             }
 
-            const classToken = hasScopedStyles && hasStyleToken ? ' ' + stylesheetToken : '';
+            // If legacy stylesheet tokens are required, then add them to the rendered string
+            const stylesheetTokenToRender =
+                stylesheetToken + (hasLegacyToken ? ` ${legacyStylesheetToken}` : '');
+
+            const classToken =
+                hasScopedStyles && hasStyleToken ? ' ' + stylesheetTokenToRender : '';
             const classAttrToken =
-                hasScopedStyles && hasStyleToken ? ` class="${stylesheetToken}"` : '';
-            const attrToken = hasStyleToken && isSyntheticShadow ? ' ' + stylesheetToken : '';
+                hasScopedStyles && hasStyleToken ? ` class="${stylesheetTokenToRender}"` : '';
+            const attrToken =
+                hasStyleToken && isSyntheticShadow ? ' ' + stylesheetTokenToRender : '';
 
             let htmlFragment = '';
             for (let i = 0, n = keys.length; i < n; i++) {
@@ -185,12 +218,6 @@ export const parseSVGFragment = buildParseFragmentFn((html, renderer) => {
 
 export function evaluateTemplate(vm: VM, html: Template): VNodes {
     if (process.env.NODE_ENV !== 'production') {
-        assert.isTrue(
-            isFunction(html),
-            `evaluateTemplate() second argument must be an imported template instead of ${toString(
-                html
-            )}`
-        );
         // in dev-mode, we support hot swapping of templates, which means that
         // the component instance might be attempting to use an old version of
         // the template, while internally, we have a replacement for it.
@@ -214,6 +241,17 @@ export function evaluateTemplate(vm: VM, html: Template): VNodes {
             tro.observe(() => {
                 // Reset the cache memoizer for template when needed.
                 if (html !== cmpTemplate) {
+                    // Check that the template was built by the compiler.
+                    if (!isTemplateRegistered(html)) {
+                        throw new TypeError(
+                            `Invalid template returned by the render() method on ${
+                                vm.tagName
+                            }. It must return an imported template (e.g.: \`import html from "./${
+                                vm.def.name
+                            }.html"\`), instead, it has returned: ${toString(html)}.`
+                        );
+                    }
+
                     if (process.env.NODE_ENV !== 'production') {
                         validateLightDomTemplate(html, vm);
                     }
@@ -227,15 +265,6 @@ export function evaluateTemplate(vm: VM, html: Template): VNodes {
                         resetComponentRoot(vm);
                     }
 
-                    // Check that the template was built by the compiler.
-                    if (!isTemplateRegistered(html)) {
-                        throw new TypeError(
-                            `Invalid template returned by the render() method on ${vm}. It must return an imported template (e.g.: \`import html from "./${
-                                vm.def.name
-                            }.html"\`), instead, it has returned: ${toString(html)}.`
-                        );
-                    }
-
                     vm.cmpTemplate = html;
 
                     // Create a brand new template cache for the swapped templated.
@@ -245,7 +274,10 @@ export function evaluateTemplate(vm: VM, html: Template): VNodes {
                     context.hasScopedStyles = computeHasScopedStyles(html, vm);
 
                     // Update the scoping token on the host element.
-                    updateStylesheetToken(vm, html);
+                    updateStylesheetToken(vm, html, /* legacy */ false);
+                    if (lwcRuntimeFlags.ENABLE_LEGACY_SCOPE_TOKENS) {
+                        updateStylesheetToken(vm, html, /* legacy */ true);
+                    }
 
                     // Evaluate, create stylesheet and cache the produced VNode for future
                     // re-rendering.
@@ -262,9 +294,6 @@ export function evaluateTemplate(vm: VM, html: Template): VNodes {
                     // add the VM to the list of host VMs that can be re-rendered if html is swapped
                     setActiveVM(vm);
                 }
-
-                // reset the refs; they will be set during the tmpl() instantiation
-                vm.refVNodes = html.hasRefs ? create(null) : null;
 
                 // right before producing the vnodes, we clear up all internal references
                 // to custom elements from the template.

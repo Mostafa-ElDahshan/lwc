@@ -6,7 +6,7 @@
  */
 import { noop } from '@lwc/shared';
 import { TransformOptions } from '../../options';
-import { transform } from '../transformer';
+import { transform, transformSync } from '../transformer';
 
 const TRANSFORMATION_OPTIONS: TransformOptions = {
     namespace: 'x',
@@ -46,14 +46,25 @@ it('should transform class fields', async () => {
     expect(code).not.toContain('foo;');
 });
 
-it('should object spread', async () => {
-    const actual = `
-        export const test = { ...a, b: 1 }
-    `;
-    const { code } = await transform(actual, 'foo.js', TRANSFORMATION_OPTIONS);
+describe('object rest spread', () => {
+    [59, 60].forEach((apiVersion) => {
+        it(`apiVersion=${apiVersion}`, async () => {
+            const actual = `
+                export const test = { ...a, b: 1 }
+            `;
+            const { code } = await transform(actual, 'foo.js', {
+                ...TRANSFORMATION_OPTIONS,
+                apiVersion,
+            });
 
-    expect(code).toContain('b: 1');
-    expect(code).not.toContain('...a');
+            expect(code).toContain('b: 1');
+            if (apiVersion === 59) {
+                expect(code).not.toContain('...a');
+            } else {
+                expect(code).toContain('...a');
+            }
+        });
+    });
 });
 
 it('should apply babel plugins when Lightning Web Security is on', async () => {
@@ -136,5 +147,125 @@ describe('instrumentation', () => {
         expect(calls[0][0]).toBe('dynamic-import-transform');
         expect(calls[1][0]).toBe('dynamic-import-transform');
         expect(calls[2][0]).toBe('dynamic-import-transform');
+    });
+});
+
+describe('unnecessary registerDecorators', () => {
+    it('should provide helpful error for decorator outside of LightningElement, apiVersion=latest', () => {
+        const actual = `
+            import { track } from 'lwc'
+            class Foo {
+              @track bar = 'baz';
+            }
+        `;
+        let error;
+        try {
+            transformSync(actual, 'foo.js', {
+                ...TRANSFORMATION_OPTIONS,
+            });
+        } catch (err) {
+            error = err;
+        }
+
+        expect(error).not.toBeUndefined();
+        expect((error as any).message).toContain(
+            'Decorators like @api, @track, and @wire are only supported in LightningElement classes.'
+        );
+    });
+
+    it('should not customize the error message for non-@track/@wire/@api decorators, apiVersion=latest', () => {
+        const actual = `
+            const thisIsNotASupportedDecorator = {};
+            class Foo {
+              @thisIsNotASupportedDecorator bar = 'baz';
+            }
+        `;
+        let error;
+        try {
+            transformSync(actual, 'foo.js', {
+                ...TRANSFORMATION_OPTIONS,
+            });
+        } catch (err) {
+            error = err;
+        }
+
+        expect(error).not.toBeUndefined();
+        expect((error as any).message).not.toContain(
+            'Decorators like @api, @track, and @wire are only supported in LightningElement classes.'
+        );
+    });
+
+    it('should allow decorator outside of LightningElement, apiVersion=59', () => {
+        const actual = `
+            import { track } from 'lwc'
+            class Foo {
+              @track bar = 'baz';
+            }
+        `;
+        const { code } = transformSync(actual, 'foo.js', {
+            ...TRANSFORMATION_OPTIONS,
+            apiVersion: 59,
+        });
+        expect(code).toContain('registerDecorators');
+    });
+});
+
+describe('sourcemaps', () => {
+    it("should generate inline sourcemaps when the output config includes the 'inline' option for sourcemaps", () => {
+        const source = `
+            import { LightningElement } from 'lwc';
+            export default class Foo extends LightningElement {}
+        `;
+
+        const { code, map } = transformSync(source, 'foo.js', {
+            ...TRANSFORMATION_OPTIONS,
+            outputConfig: {
+                sourcemap: 'inline',
+            },
+        });
+        expect(code).toContain('//# sourceMappingURL=data:application/json;');
+        expect(map).toBeNull();
+    });
+
+    it("should generate sourcemaps when the sourcemap configuration value is 'true'", () => {
+        const source = `
+            import { LightningElement } from 'lwc';
+            export default class Foo extends LightningElement {}
+        `;
+
+        const { map } = transformSync(source, 'foo.js', {
+            ...TRANSFORMATION_OPTIONS,
+            outputConfig: {
+                sourcemap: true,
+            },
+        });
+        expect(map).not.toBeNull();
+    });
+
+    describe("should fail validation of options if sourcemap configuration value is neither boolean nor 'inline'.", () => {
+        const source = `
+            import { LightningElement } from 'lwc';
+            export default class Foo extends LightningElement {}
+        `;
+
+        [
+            { name: 'invalid string', sourcemap: 'invalid' },
+            { name: 'object', sourcemap: {} },
+            { name: 'numbers', sourcemap: 123 },
+        ].forEach(({ name, sourcemap }) => {
+            it(name, () => {
+                expect(() =>
+                    transformSync(source, 'foo.js', {
+                        ...TRANSFORMATION_OPTIONS,
+                        outputConfig: {
+                            // @ts-expect-error Property can be passed from JS environments with no type checking.
+                            sourcemap,
+                        },
+                    })
+                ).toThrow(
+                    `LWC1021: Expected a boolean value or 'inline' for outputConfig.sourcemap, received "${sourcemap}".`
+                );
+            });
+        });
     });
 });

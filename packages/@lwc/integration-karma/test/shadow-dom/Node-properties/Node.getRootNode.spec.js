@@ -1,4 +1,5 @@
 import { createElement } from 'lwc';
+import { ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE } from 'test-utils';
 import Slotted from 'x/slotted';
 import Container from 'x/container';
 import ManualNodes from 'x/manualNodes';
@@ -36,7 +37,17 @@ describe('Node.getRootNode', () => {
     it('root element in a disconnected DOM tree', () => {
         const elm = createElement('x-slotted', { is: Slotted });
         const frag = document.createDocumentFragment();
-        frag.appendChild(elm);
+        const doAppend = () => frag.appendChild(elm);
+
+        if (ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE) {
+            doAppend();
+        } else {
+            // Expected warning, since we are working with disconnected nodes
+            expect(doAppend).toLogWarningDev([
+                /fired a `connectedCallback` and rendered, but was not connected to the DOM/,
+                /fired a `connectedCallback` and rendered, but was not connected to the DOM/,
+            ]);
+        }
 
         expect(elm.getRootNode()).toBe(frag);
         expect(elm.getRootNode(composedTrueConfig)).toBe(frag);
@@ -130,7 +141,7 @@ describe('Node.getRootNode', () => {
             const elm = host.shadowRoot.querySelector('div.withoutManual');
             const span = document.createElement('span');
 
-            spyOn(console, 'error'); // Ignore the engine warning
+            spyOn(console, 'warn'); // Ignore the engine warning
             elm.appendChild(span);
             expect(span.getRootNode()).toBe(host.shadowRoot);
             expect(span.getRootNode(composedTrueConfig)).toBe(document);
@@ -146,7 +157,7 @@ describe('Node.getRootNode', () => {
             const elm = host.shadowRoot.querySelector('div.withoutManual');
             const nestedElem = createElement('x-text', { is: Text });
 
-            spyOn(console, 'error'); // Ignore the engine warning
+            spyOn(console, 'warn'); // Ignore the engine warning
             elm.appendChild(nestedElem);
             expect(nestedElem.getRootNode()).toBe(host.shadowRoot);
             expect(nestedElem.getRootNode(composedTrueConfig)).toBe(document);
@@ -205,7 +216,7 @@ describe('Node.getRootNode', () => {
                 const div = outerElem.shadowRoot.querySelector('div');
                 div.appendChild(innerElem);
                 // Ignore the engine warning that a node without lwc:dom="manual" is being manually changed
-                spyOn(console, 'error');
+                spyOn(console, 'warn');
             });
 
             it("getRootNode() of inner shadow's dynamic element should return inner shadowRoot", () => {

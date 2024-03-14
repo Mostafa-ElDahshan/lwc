@@ -4,10 +4,23 @@
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
  */
-import { ArrayPush, create, isArray, isFunction, isUndefined, keys, seal } from '@lwc/shared';
+import {
+    ArrayPush,
+    create,
+    isArray,
+    isFunction,
+    keys,
+    seal,
+    isAPIFeatureEnabled,
+    APIFeature,
+    isUndefined,
+    isNull,
+} from '@lwc/shared';
+import { logWarnOnce } from '../shared/logger';
 import { StylesheetFactory, TemplateStylesheetFactories } from './stylesheet';
-import { RefVNodes, VM } from './vm';
-import { VBaseElement, VStatic } from './vnodes';
+import { getComponentAPIVersion, getComponentRegisteredName } from './component';
+import { LightningElementConstructor } from './base-lightning-element';
+import { VElementData } from './vnodes';
 
 type Callback = () => void;
 
@@ -41,6 +54,7 @@ export function addCallbackToNextTick(callback: Callback) {
         }
     }
     if (nextTickCallbackQueue.length === 0) {
+        // eslint-disable-next-line @typescript-eslint/no-floating-promises
         Promise.resolve().then(flushCallbackQueue);
     }
     ArrayPush.call(nextTickCallbackQueue, callback);
@@ -54,6 +68,17 @@ export function guid(): string {
     }
 
     return s4() + s4() + '-' + s4() + '-' + s4() + '-' + s4() + '-' + s4() + s4() + s4();
+}
+
+export function shouldUseNativeCustomElementLifecycle(ctor: LightningElementConstructor) {
+    if (lwcRuntimeFlags.DISABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE) {
+        // temporary "kill switch"
+        return false;
+    }
+
+    const apiVersion = getComponentAPIVersion(ctor);
+
+    return isAPIFeatureEnabled(APIFeature.ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE, apiVersion);
 }
 
 // Borrowed from Vue template compiler.
@@ -101,23 +126,6 @@ export function flattenStylesheets(stylesheets: TemplateStylesheetFactories): St
     return list;
 }
 
-// Set a ref (lwc:ref) on a VM, from a template API
-export function setRefVNode(vm: VM, ref: string, vnode: VBaseElement | VStatic) {
-    if (process.env.NODE_ENV !== 'production' && isUndefined(vm.refVNodes)) {
-        throw new Error('refVNodes must be defined when setting a ref');
-    }
-
-    // If this method is called, then vm.refVNodes is set as the template has refs.
-    // If not, then something went wrong and we threw an error above.
-    const refVNodes: RefVNodes = vm.refVNodes!;
-
-    // In cases of conflict (two elements with the same ref), prefer, the last one,
-    // in depth-first traversal order.
-    if (!(ref in refVNodes) || refVNodes[ref].key < vnode.key) {
-        refVNodes[ref] = vnode;
-    }
-}
-
 // Throw an error if we're running in prod mode. Ensures code is truly removed from prod mode.
 export function assertNotProd() {
     /* istanbul ignore if */
@@ -125,4 +133,48 @@ export function assertNotProd() {
         // this method should never leak to prod
         throw new ReferenceError();
     }
+}
+
+// Temporary fix for when the LWC v5 compiler is used in conjunction with a v6+ engine
+// The old compiler format used the "slot" attribute in the `data` bag, whereas the new
+// format uses the special `slotAssignment` key.
+// This should be removed when the LWC v5 compiler is not used anywhere where it could be mismatched
+// with another LWC engine version.
+// TODO [#3974]: remove temporary logic to support v5 compiler + v6+ engine
+export function applyTemporaryCompilerV5SlotFix(data: VElementData) {
+    if (lwcRuntimeFlags.DISABLE_TEMPORARY_V5_COMPILER_SUPPORT) {
+        return data;
+    }
+    const { attrs } = data;
+    if (!isUndefined(attrs)) {
+        const { slot } = attrs;
+        if (!isUndefined(slot) && !isNull(slot)) {
+            return {
+                ...data,
+                attrs: cloneAndOmitKey(attrs, 'slot'),
+                slotAssignment: String(slot),
+            };
+        }
+    }
+    return data;
+}
+
+export function shouldBeFormAssociated(Ctor: LightningElementConstructor) {
+    const ctorFormAssociated = Boolean(Ctor.formAssociated);
+    const apiVersion = getComponentAPIVersion(Ctor);
+    const apiFeatureEnabled = isAPIFeatureEnabled(
+        APIFeature.ENABLE_ELEMENT_INTERNALS_AND_FACE,
+        apiVersion
+    );
+
+    if (process.env.NODE_ENV !== 'production' && ctorFormAssociated && !apiFeatureEnabled) {
+        const tagName = getComponentRegisteredName(Ctor);
+        logWarnOnce(
+            `Component <${tagName}> set static formAssociated to true, but form ` +
+                `association is not enabled because the API version is ${apiVersion}. To enable form association, ` +
+                `update the LWC component API version to 61 or above. https://lwc.dev/guide/versioning`
+        );
+    }
+
+    return ctorFormAssociated && apiFeatureEnabled;
 }

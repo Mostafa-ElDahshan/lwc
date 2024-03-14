@@ -193,6 +193,13 @@ export function property(
     };
 }
 
+export function spreadElement(argument: t.Expression): t.SpreadElement {
+    return {
+        type: 'SpreadElement',
+        argument,
+    };
+}
+
 export function assignmentProperty(
     key: t.AssignmentProperty['key'],
     value: t.AssignmentProperty['value'],
@@ -300,7 +307,7 @@ export function functionExpression(
 }
 
 export function functionDeclaration(
-    id: null | t.Identifier,
+    id: t.Identifier,
     params: t.FunctionDeclaration['params'],
     body: t.FunctionDeclaration['body'],
     config?: Partial<t.FunctionDeclaration>

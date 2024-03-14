@@ -16,27 +16,36 @@ require('dotenv').config({
 
 const baseConfig = require('./wdio.conf.js');
 
+// #TODO[3754]: Only Chrome and Edge on Windows platform currently works, all other browser tests fail.
+// Need to investigate why sauce labs fails for all other platforms.
 const browsers = [
     // Note that headless Chrome also needs to be updated in wdio.conf.js for non-SauceLabs runs
     {
         commonName: 'chrome',
         browserName: 'chrome',
         version: 'latest',
+        // Note chrome fails for Linux and macOS
+        platform: 'Windows 11',
     },
     {
         commonName: 'edge',
         browserName: 'MicrosoftEdge',
         version: 'latest',
+        platform: 'Windows 11',
     },
     {
         commonName: 'safari',
         browserName: 'safari',
         version: 'latest',
+        // Note safari fails for macOS
+        platform: 'macOS 13',
     },
     {
         commonName: 'firefox',
         browserName: 'firefox',
         version: 'latest',
+        // Note firefox is failing for both Linux and Windows 11
+        platform: 'Windows 11',
     },
 ];
 
@@ -53,7 +62,7 @@ if (!accessKey) {
 }
 
 const tunnelId = process.env.SAUCE_TUNNEL_ID;
-const buildId = process.env.CIRCLE_BUILD_NUM || Date.now();
+const buildId = process.env.GITHUB_RUN_ID || Date.now();
 
 const name = ['integration-test', mode].join(' - ');
 const build = ['integration-test', buildId, mode].join(' - ');
@@ -61,11 +70,7 @@ const tags = [mode];
 
 const customData = {
     ci: !!process.env.CI,
-    build: process.env.CIRCLE_BUILD_NUM,
-
-    commit: process.env.CIRCLE_SHA1,
-    branch: process.env.CIRCLE_BRANCH,
-    buildUrl: process.env.CIRCLE_BUILD_URL,
+    buildId,
 };
 
 function getCapabilities() {

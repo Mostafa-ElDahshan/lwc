@@ -8,13 +8,10 @@
 import fs from 'fs';
 import path from 'path';
 
-import { rollup, RollupWarning } from 'rollup';
-// @ts-ignore
+import { rollup, RollupLog } from 'rollup';
 import lwcRollupPlugin from '@lwc/rollup-plugin';
 import { isVoidElement, HTML_NAMESPACE } from '@lwc/shared';
 import { testFixtureDir } from '@lwc/jest-utils-lwc-internals';
-import { setFeatureFlagForTest } from '../index';
-import type { FeatureFlagMap } from '@lwc/features';
 import type * as lwc from '../index';
 
 interface FixtureModule {
@@ -30,7 +27,7 @@ async function compileFixture({ input, dirname }: { input: string; dirname: stri
     const modulesDir = path.resolve(dirname, './modules');
     const outputFile = path.resolve(dirname, './dist/compiled.js');
     // TODO [#3331]: this is only needed to silence warnings on lwc:dynamic, remove in 246.
-    const warnings: RollupWarning[] = [];
+    const warnings: RollupLog[] = [];
 
     const bundle = await rollup({
         input,
@@ -65,7 +62,6 @@ async function compileFixture({ input, dirname }: { input: string; dirname: stri
  * This is a replacement for Prettier HTML formatting. Prettier formatting is too aggressive for
  * fixture testing. It not only indent the HTML code but also fixes HTML issues. For testing we want
  * to make sure that the fixture file is as close as possible to what the engine produces.
- *
  * @param src the original HTML fragment.
  * @returns the formatter HTML fragment.
  */
@@ -91,7 +87,7 @@ function formatHTML(src: string): string {
                 const styleMatch = src.slice(pos).match(/<style([\s\S]*?)>([\s\S]*?)<\/style>/);
                 if (styleMatch) {
                     // opening tag
-                    const [wholeMatch, attrs, textContent] = styleMatch!;
+                    const [wholeMatch, attrs, textContent] = styleMatch;
                     res += getPadding() + `<style${attrs}>` + '\n';
                     depth++;
                     res += getPadding() + textContent + '\n';
@@ -206,30 +202,6 @@ function testFixtures() {
     );
 }
 
-// Run the fixtures with both synthetic and native custom element lifecycle.
-// The expectation is that the fixtures will be exactly the same for both.
 describe('fixtures', () => {
-    describe('synthetic custom element lifecycle', () => {
-        testFixtures();
-    });
-
-    function testWithFeatureFlagEnabled(flagName: keyof FeatureFlagMap) {
-        beforeEach(() => {
-            setFeatureFlagForTest(flagName, true);
-        });
-
-        afterEach(() => {
-            setFeatureFlagForTest(flagName, false);
-        });
-
-        testFixtures();
-    }
-
-    describe('native custom element lifecycle', () => {
-        testWithFeatureFlagEnabled('ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE');
-    });
-
-    describe('disable aria reflection polyfill', () => {
-        testWithFeatureFlagEnabled('DISABLE_ARIA_REFLECTION_POLYFILL');
-    });
+    testFixtures();
 });

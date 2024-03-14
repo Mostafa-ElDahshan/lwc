@@ -71,7 +71,7 @@ function isNodeSlotted(host: Element, node: Node): boolean {
             // have different owner key. for slotted elements, this is possible
             // if the parent happens to be a slot.
             if (isSlotElement(parent)) {
-                /**
+                /*
                  * the slot parent might be allocated inside another slot, think of:
                  * <x-root> (<--- root element)
                  *    <x-parent> (<--- own by x-root)
@@ -243,7 +243,7 @@ export function getFilteredChildNodes(node: Node): Element[] {
         const resolver = getShadowRootResolver(getShadowRoot(node));
         // Typescript is inferring the wrong function type for this particular
         // overloaded method: https://github.com/Microsoft/TypeScript/issues/27972
-        // @ts-ignore type-mismatch
+        // @ts-expect-error type-mismatch
         return ArrayReduce.call(
             slots,
             (seed, slot) => {

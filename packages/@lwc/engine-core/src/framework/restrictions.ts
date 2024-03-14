@@ -5,7 +5,6 @@
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
  */
 
-/* eslint @lwc/lwc-internal/no-production-assert: "off" */
 import {
     assign,
     create,
@@ -14,15 +13,11 @@ import {
     getPrototypeOf,
     isUndefined,
     setPrototypeOf,
-    isObject,
-    isNull,
 } from '@lwc/shared';
 
-import { logError } from '../shared/logger';
-import { getComponentTag } from '../shared/format';
+import { logError, logWarn } from '../shared/logger';
 
-import { LightningElement } from './base-lightning-element';
-import { getAssociatedVM, getAssociatedVMIfPresent } from './vm';
+import { getAssociatedVMIfPresent } from './vm';
 import { assertNotProd } from './utils';
 
 function generateDataDescriptor(options: PropertyDescriptor): PropertyDescriptor {
@@ -58,8 +53,8 @@ export function lockDomMutation() {
     isDomMutationAllowed = false;
 }
 
-function logMissingPortalError(name: string, type: string) {
-    return logError(
+function logMissingPortalWarn(name: string, type: string) {
+    return logWarn(
         `The \`${name}\` ${type} is available only on elements that use the \`lwc:dom="manual"\` directive.`
     );
 }
@@ -94,14 +89,14 @@ export function patchElementWithRestrictions(
         assign(descriptors, {
             appendChild: generateDataDescriptor({
                 value(this: Node, aChild: Node) {
-                    logMissingPortalError('appendChild', 'method');
+                    logMissingPortalWarn('appendChild', 'method');
                     return appendChild.call(this, aChild);
                 },
             }),
             insertBefore: generateDataDescriptor({
                 value(this: Node, newNode: Node, referenceNode: Node) {
                     if (!isDomMutationAllowed) {
-                        logMissingPortalError('insertBefore', 'method');
+                        logMissingPortalWarn('insertBefore', 'method');
                     }
                     return insertBefore.call(this, newNode, referenceNode);
                 },
@@ -109,14 +104,14 @@ export function patchElementWithRestrictions(
             removeChild: generateDataDescriptor({
                 value(this: Node, aChild: Node) {
                     if (!isDomMutationAllowed) {
-                        logMissingPortalError('removeChild', 'method');
+                        logMissingPortalWarn('removeChild', 'method');
                     }
                     return removeChild.call(this, aChild);
                 },
             }),
             replaceChild: generateDataDescriptor({
                 value(this: Node, newChild: Node, oldChild: Node) {
-                    logMissingPortalError('replaceChild', 'method');
+                    logMissingPortalWarn('replaceChild', 'method');
                     return replaceChild.call(this, newChild, oldChild);
                 },
             }),
@@ -126,7 +121,7 @@ export function patchElementWithRestrictions(
                 },
                 set(this: Node, value: string) {
                     if (!isDomMutationAllowed) {
-                        logMissingPortalError('nodeValue', 'property');
+                        logMissingPortalWarn('nodeValue', 'property');
                     }
                     originalNodeValueDescriptor.set!.call(this, value);
                 },
@@ -136,7 +131,7 @@ export function patchElementWithRestrictions(
                     return originalTextContentDescriptor.get!.call(this);
                 },
                 set(this: Node, value: string) {
-                    logMissingPortalError('textContent', 'property');
+                    logMissingPortalWarn('textContent', 'property');
                     originalTextContentDescriptor.set!.call(this, value);
                 },
             }),
@@ -145,7 +140,7 @@ export function patchElementWithRestrictions(
                     return originalInnerHTMLDescriptor.get!.call(this);
                 },
                 set(this: Element, value: string) {
-                    logMissingPortalError('innerHTML', 'property');
+                    logMissingPortalWarn('innerHTML', 'property');
                     return originalInnerHTMLDescriptor.set!.call(this, value);
                 },
             }),
@@ -199,7 +194,7 @@ function getShadowRootRestrictionsDescriptors(sr: ShadowRoot): PropertyDescripto
                     );
                 }
                 // Typescript does not like it when you treat the `arguments` object as an array
-                // @ts-ignore type-mismatch
+                // @ts-expect-error type-mismatch
                 return originalAddEventListener.apply(this, arguments);
             },
         }),
@@ -260,43 +255,8 @@ function getCustomElementRestrictionsDescriptors(elm: HTMLElement): PropertyDesc
                     );
                 }
                 // Typescript does not like it when you treat the `arguments` object as an array
-                // @ts-ignore type-mismatch
+                // @ts-expect-error type-mismatch
                 return originalAddEventListener.apply(this, arguments);
-            },
-        }),
-    };
-}
-
-function getLightningElementPrototypeRestrictionsDescriptors(
-    proto: typeof LightningElement.prototype
-): PropertyDescriptorMap {
-    assertNotProd(); // this method should never leak to prod
-
-    const originalDispatchEvent = proto.dispatchEvent;
-
-    return {
-        dispatchEvent: generateDataDescriptor({
-            value(this: LightningElement, event: Event): boolean {
-                const vm = getAssociatedVM(this);
-
-                if (!isNull(event) && isObject(event)) {
-                    const { type } = event;
-
-                    if (!/^[a-z][a-z0-9_]*$/.test(type)) {
-                        logError(
-                            `Invalid event type "${type}" dispatched in element ${getComponentTag(
-                                vm
-                            )}.` +
-                                ` Event name must start with a lowercase letter and followed only lowercase` +
-                                ` letters, numbers, and underscores`,
-                            vm
-                        );
-                    }
-                }
-
-                // Typescript does not like it when you treat the `arguments` object as an array
-                // @ts-ignore type-mismatch
-                return originalDispatchEvent.apply(this, arguments);
             },
         }),
     };
@@ -312,10 +272,4 @@ export function patchCustomElementWithRestrictions(elm: HTMLElement) {
     const restrictionsDescriptors = getCustomElementRestrictionsDescriptors(elm);
     const elmProto = getPrototypeOf(elm);
     setPrototypeOf(elm, create(elmProto, restrictionsDescriptors));
-}
-
-export function patchLightningElementPrototypeWithRestrictions(
-    proto: typeof LightningElement.prototype
-) {
-    defineProperties(proto, getLightningElementPrototypeRestrictionsDescriptors(proto));
 }

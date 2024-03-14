@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, salesforce.com, inc.
+ * Copyright (c) 2023, Salesforce.com, inc.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
@@ -15,7 +15,6 @@ type E = HostElement;
 export type LifecycleCallback = (elm: E) => void;
 
 export interface RendererAPI {
-    isNativeShadowDefined: boolean;
     isSyntheticShadowDefined: boolean;
     insert: (node: N, parent: E, anchor: N | null) => void;
     remove: (node: N, parent: E) => void;
@@ -25,6 +24,7 @@ export interface RendererAPI {
     createText: (content: string) => N;
     createComment: (content: string) => N;
     nextSibling: (node: N) => N | null;
+    previousSibling: (node: N) => N | null;
     attachShadow: (element: E, options: ShadowRootInit) => N;
     getProperty: (node: N, key: string) => any;
     setProperty: (node: N, key: string, value: any) => void;
@@ -58,19 +58,22 @@ export interface RendererAPI {
     getFirstElementChild: (element: E) => E | null;
     getLastChild: (element: E) => N | null;
     getLastElementChild: (element: E) => E | null;
+    getTagName: (element: E) => string;
     isConnected: (node: N) => boolean;
     insertStylesheet: (content: string, target?: ShadowRoot) => void;
     assertInstanceOfHTMLElement: (elm: any, msg: string) => void;
     createCustomElement: (
         tagName: string,
         upgradeCallback: LifecycleCallback,
-        connectedCallback?: LifecycleCallback,
-        disconnectedCallback?: LifecycleCallback
+        useNativeLifecycle: boolean,
+        isFormAssociated: boolean
     ) => E;
+    defineCustomElement: (tagName: string, isFormAssociated: boolean) => void;
     ownerDocument(elm: E): Document;
     registerContextConsumer: (
         element: E,
         adapterContextToken: string,
         subscriptionPayload: WireContextSubscriptionPayload
     ) => void;
+    attachInternals: (elm: E) => ElementInternals;
 }

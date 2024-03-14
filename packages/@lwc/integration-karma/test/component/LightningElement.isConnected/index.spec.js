@@ -6,6 +6,7 @@ describe('Basic DOM manipulation cases', () => {
     class Test extends LightningElement {
         constructor() {
             super();
+            // eslint-disable-next-line @typescript-eslint/no-this-alias
             context = this;
         }
     }
@@ -38,7 +39,11 @@ describe('Basic DOM manipulation cases', () => {
     });
     it('should return false for host connected to detached fargment', () => {
         const frag = document.createDocumentFragment();
-        frag.appendChild(elm);
+        // Expected warning, since we are working with disconnected nodes,
+        // and the Test element is manually constructed, so it will always run in synthetic lifecycle mode
+        expect(() => frag.appendChild(elm)).toLogWarningDev(
+            /fired a `connectedCallback` and rendered, but was not connected to the DOM/
+        );
         expect(context.isConnected).toBe(false);
     });
 });

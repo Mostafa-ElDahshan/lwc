@@ -9,15 +9,19 @@
     "moduleResolution": "node",
     "esModuleInterop": true,
 
-    "target": "es2018",
-    "lib": ["es2018"],
+    "target": "es2021",
+    "lib": ["es2021"],
 
     // Disable automatic inclusion of @types packages
     "types": ["node", "jest"],
 
     // @rollup/plugin-typescript is actually responsible for writing dist files. Using "." as the declarationDir
     // ensures that .d.ts files are co-located with JS files, e.g. `dist/index.js` and `dist/index.d.ts`.
-    "declarationDir": "."
+    "declarationDir": ".",
+
+    // @rollup/plugin-typescript ignores this setting (it always emits); we can set it here to
+    // facilitate type checking without running the full build
+    "noEmit": true
   },
 
   "exclude": [

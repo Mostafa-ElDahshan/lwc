@@ -1,4 +1,4 @@
-import { createElement, setFeatureFlagForTest } from 'lwc';
+import { createElement } from 'lwc';
 import { extractDataIds, isNativeShadowRootInstance } from 'test-utils';
 import ParentAnyChildAny from 'x/parentAnyChildAny';
 import ParentAnyChildReset from 'x/parentAnyChildReset';
@@ -15,17 +15,8 @@ import GrandparentResetParentAnyChildReset from 'x/grandparentResetParentAnyChil
 import GrandparentResetParentResetChildAny from 'x/grandparentResetParentResetChildAny';
 import GrandparentResetParentResetChildReset from 'x/grandparentResetParentResetChildReset';
 
-// In compat mode, native components and synthetic components will both render
-// in synthetic style; there's no difference.
-if (!process.env.NATIVE_SHADOW && !process.env.COMPAT) {
+if (!process.env.NATIVE_SHADOW) {
     describe('synthetic behavior', () => {
-        beforeEach(() => {
-            setFeatureFlagForTest('ENABLE_MIXED_SHADOW_MODE', true);
-        });
-        afterEach(() => {
-            setFeatureFlagForTest('ENABLE_MIXED_SHADOW_MODE', false);
-        });
-
         const scenarios = [
             {
                 Component: ParentAnyChildAny,

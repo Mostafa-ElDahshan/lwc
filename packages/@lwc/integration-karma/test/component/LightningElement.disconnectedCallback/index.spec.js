@@ -1,5 +1,5 @@
 import { createElement } from 'lwc';
-import { customElementConnectedErrorListener } from 'test-utils';
+import { customElementCallbackReactionErrorListener } from 'test-utils';
 
 import Slotted from 'x/slotted';
 import Test from 'x/test';
@@ -8,14 +8,16 @@ import DualTemplate from 'x/dualTemplate';
 import ExplicitRender from 'x/explicitRender';
 
 function testDisconnectSlot(name, fn) {
-    it(`should invoke the disconnectedCallback when root element is removed from the DOM via ${name}`, (done) => {
-        const elm = createElement('x-test', { is: Test });
-        elm.disconnect = function (context) {
-            expect(context instanceof Test).toBe(true);
-            done();
-        };
+    it(`should invoke the disconnectedCallback when root element is removed from the DOM via ${name}`, () => {
+        return new Promise((resolve) => {
+            const elm = createElement('x-test', { is: Test });
+            elm.disconnect = function (context) {
+                expect(context instanceof Test).toBe(true);
+                resolve();
+            };
 
-        fn(elm);
+            fn(elm);
+        });
     });
 }
 
@@ -120,7 +122,7 @@ describe('disconnectedCallback for host with slots', () => {
      * Automation for issue #1090
      * In this scenario the slot content from the parent's template is unrendered.
      * disconnecting the slot receiver was causing errors
-     **/
+     */
     it('should invoke disconnectedCallback on child that has unrendered slot content', () => {
         parent.hideChildIgnoresSlots = true;
 
@@ -149,7 +151,7 @@ it('should associate the component stack when the invocation throws', () => {
     const elm = createElement('x-disconnected-callback-throw', { is: DisconnectedCallbackThrow });
     document.body.appendChild(elm);
 
-    const error = customElementConnectedErrorListener(() => {
+    const error = customElementCallbackReactionErrorListener(() => {
         document.body.removeChild(elm);
     });
 

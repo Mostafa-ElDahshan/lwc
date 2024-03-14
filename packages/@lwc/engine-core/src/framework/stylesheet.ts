@@ -28,8 +28,8 @@ export type StylesheetFactory = (
 
 /**
  * The list of stylesheets associated with a template. Each entry is either a StylesheetFactory or a
- * TemplateStylesheetFactory a given stylesheet depends on other external stylesheets (via the
- * @import CSS declaration).
+ * TemplateStylesheetFactory a given stylesheet depends on other external stylesheets (via
+ * the @import CSS declaration).
  */
 export type TemplateStylesheetFactories = Array<StylesheetFactory | TemplateStylesheetFactories>;
 
@@ -51,7 +51,8 @@ function createInlineStyleVNode(content: string): VNode {
     );
 }
 
-export function updateStylesheetToken(vm: VM, template: Template) {
+// TODO [#3733]: remove support for legacy scope tokens
+export function updateStylesheetToken(vm: VM, template: Template, legacy: boolean) {
     const {
         elm,
         context,
@@ -59,7 +60,8 @@ export function updateStylesheetToken(vm: VM, template: Template) {
         shadowMode,
         renderer: { getClassList, removeAttribute, setAttribute },
     } = vm;
-    const { stylesheets: newStylesheets, stylesheetToken: newStylesheetToken } = template;
+    const { stylesheets: newStylesheets } = template;
+    const newStylesheetToken = legacy ? template.legacyStylesheetToken : template.stylesheetToken;
     const { stylesheets: newVmStylesheets } = vm;
     const isSyntheticShadow =
         renderMode === RenderMode.Shadow && shadowMode === ShadowMode.Synthetic;
@@ -70,11 +72,18 @@ export function updateStylesheetToken(vm: VM, template: Template) {
     let newHasTokenInAttribute: boolean | undefined;
 
     // Reset the styling token applied to the host element.
-    const {
-        stylesheetToken: oldToken,
-        hasTokenInClass: oldHasTokenInClass,
-        hasTokenInAttribute: oldHasTokenInAttribute,
-    } = context;
+    let oldToken;
+    let oldHasTokenInClass;
+    let oldHasTokenInAttribute;
+    if (legacy) {
+        oldToken = context.legacyStylesheetToken;
+        oldHasTokenInClass = context.hasLegacyTokenInClass;
+        oldHasTokenInAttribute = context.hasLegacyTokenInAttribute;
+    } else {
+        oldToken = context.stylesheetToken;
+        oldHasTokenInClass = context.hasTokenInClass;
+        oldHasTokenInAttribute = context.hasTokenInAttribute;
+    }
     if (!isUndefined(oldToken)) {
         if (oldHasTokenInClass) {
             getClassList(elm).remove(makeHostToken(oldToken));
@@ -105,9 +114,15 @@ export function updateStylesheetToken(vm: VM, template: Template) {
     }
 
     // Update the styling tokens present on the context object.
-    context.stylesheetToken = newToken;
-    context.hasTokenInClass = newHasTokenInClass;
-    context.hasTokenInAttribute = newHasTokenInAttribute;
+    if (legacy) {
+        context.legacyStylesheetToken = newToken;
+        context.hasLegacyTokenInClass = newHasTokenInClass;
+        context.hasLegacyTokenInAttribute = newHasTokenInAttribute;
+    } else {
+        context.stylesheetToken = newToken;
+        context.hasTokenInClass = newHasTokenInClass;
+        context.hasTokenInAttribute = newHasTokenInAttribute;
+    }
 }
 
 function evaluateStylesheetsContent(
@@ -141,7 +156,8 @@ function evaluateStylesheetsContent(
                 vm.renderMode === RenderMode.Light
             ) {
                 logError(
-                    'Unscoped CSS is not supported in Light DOM. Please use scoped CSS (*.scoped.css) instead of unscoped CSS (*.css).'
+                    'Unscoped CSS is not supported in Light DOM in this environment. Please use scoped CSS ' +
+                        '(*.scoped.css) instead of unscoped CSS (*.css). See also: https://sfdc.co/scoped-styles-light-dom'
                 );
                 continue;
             }
@@ -217,10 +233,17 @@ function getNearestShadowComponent(vm: VM): VM | null {
  * If the component that is currently being rendered uses scoped styles,
  * this returns the unique token for that scoped stylesheet. Otherwise
  * it returns null.
+ * @param owner
+ * @param legacy
  */
-export function getScopeTokenClass(owner: VM): string | null {
+// TODO [#3733]: remove support for legacy scope tokens
+export function getScopeTokenClass(owner: VM, legacy: boolean): string | null {
     const { cmpTemplate, context } = owner;
-    return (context.hasScopedStyles && cmpTemplate?.stylesheetToken) || null;
+    return (
+        (context.hasScopedStyles &&
+            (legacy ? cmpTemplate?.legacyStylesheetToken : cmpTemplate?.stylesheetToken)) ||
+        null
+    );
 }
 
 /**
@@ -228,6 +251,7 @@ export function getScopeTokenClass(owner: VM): string | null {
  * exists. Otherwise it returns null.
  *
  * A host style token is applied to the component if scoped styles are used.
+ * @param vnode
  */
 export function getStylesheetTokenHost(vnode: VCustomElement): string | null {
     const { template } = getComponentInternalDef(vnode.ctor);

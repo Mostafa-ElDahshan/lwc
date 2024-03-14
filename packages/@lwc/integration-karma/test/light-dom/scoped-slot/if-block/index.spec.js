@@ -1,6 +1,9 @@
 import { createElement } from 'lwc';
+import { USE_COMMENTS_FOR_FRAGMENT_BOOKENDS } from 'test-utils';
 
 import MixedSlotParent from 'x/mixedSlotParent';
+
+const vFragBookend = USE_COMMENTS_FOR_FRAGMENT_BOOKENDS ? '<!---->' : '';
 
 describe('if-block', () => {
     it('should work when parent and child have matching slot types', () => {
@@ -8,13 +11,17 @@ describe('if-block', () => {
         elm.showStandard = true;
         document.body.appendChild(elm);
         const child = elm.shadowRoot.querySelector('x-mixed-slot-child');
-        expect(child.innerHTML).toBe('<span>Slotted content from parent</span>');
+        expect(child.innerHTML).toBe(
+            `${vFragBookend}${vFragBookend}<span>Slotted content from parent</span>${vFragBookend}${vFragBookend}`
+        );
 
         // Switch off the if branch and switch on the elseif branch
         elm.showStandard = false;
         elm.showVariant = true;
         return Promise.resolve().then(() => {
-            expect(child.innerHTML).toBe('<span>1 - slots and if block</span>');
+            expect(child.innerHTML).toBe(
+                `${vFragBookend}${vFragBookend}${vFragBookend}<span>1 - slots and if block</span>${vFragBookend}${vFragBookend}${vFragBookend}`
+            );
         });
     });
 
@@ -42,7 +49,9 @@ describe('if-block', () => {
                     expect(consoleErrorSpy).toHaveBeenCalledTimes(1);
                     expect(errorMsg).toMatch(/Mismatched slot types for \(default\) slot/);
                 }
-                expect(child.innerHTML).toBe('');
+                expect(child.innerHTML).toBe(
+                    `${vFragBookend}${vFragBookend}${vFragBookend}${vFragBookend}`
+                );
             });
     });
 });

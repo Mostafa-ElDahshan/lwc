@@ -22,6 +22,7 @@ const {
     BENCHMARK_REPO = 'https://github.com/salesforce/lwc.git',
     BENCHMARK_REF = 'master',
     BENCHMARK_AUTO_SAMPLE_CONDITIONS = '1%', // how much difference we want to determine between A and B
+    CHROME_BINARY, // if a custom chrome binary is used eg: in CI
 } = process.env;
 let {
     BENCHMARK_SAMPLE_SIZE = 100, // minimum number of samples to run
@@ -65,7 +66,7 @@ function createHtml(benchmarkFile) {
   `.trim();
 }
 
-async function createTachometerJson(htmlFilename, benchmarkName, directoryHash) {
+function createTachometerJson(htmlFilename, benchmarkName, directoryHash) {
     return {
         $schema: 'https://raw.githubusercontent.com/Polymer/tachometer/master/config.schema.json',
         sampleSize: BENCHMARK_SAMPLE_SIZE,
@@ -78,6 +79,7 @@ async function createTachometerJson(htmlFilename, benchmarkName, directoryHash) 
                 browser: {
                     name: 'chrome',
                     headless: true,
+                    ...(CHROME_BINARY && { binary: CHROME_BINARY }),
                 },
                 measurement: {
                     mode: 'performance',
@@ -139,11 +141,7 @@ async function processBenchmarkFile(benchmarkFile, directoryHash) {
     async function writeTachometerJsonFile() {
         const engineType = benchmarkFile.includes('/engine-server/') ? 'server' : 'dom';
         const benchmarkName = `${engineType}-${benchmarkFileBasename.split('.')[0]}`;
-        const tachometerJson = await createTachometerJson(
-            htmlFilename,
-            benchmarkName,
-            directoryHash
-        );
+        const tachometerJson = createTachometerJson(htmlFilename, benchmarkName, directoryHash);
         const jsonFilename = path.join(
             targetDir,
             `${benchmarkFileBasename.split('.')[0]}.tachometer.json`

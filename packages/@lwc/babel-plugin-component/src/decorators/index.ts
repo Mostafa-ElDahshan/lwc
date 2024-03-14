@@ -8,6 +8,7 @@ import { Node, types, Visitor } from '@babel/core';
 import { Binding, NodePath } from '@babel/traverse';
 import { addNamed } from '@babel/helper-module-imports';
 import { DecoratorErrors } from '@lwc/errors';
+import { APIFeature, getAPIVersionFromNumber, isAPIFeatureEnabled } from '@lwc/shared';
 import { DECORATOR_TYPES, LWC_PACKAGE_ALIAS, REGISTER_DECORATORS_ID } from '../constants';
 import { generateError, isClassMethod, isGetterClassMethod, isSetterClassMethod } from '../utils';
 import { BabelAPI, BabelTypes, LwcBabelPluginPass } from '../types';
@@ -33,12 +34,19 @@ function isLwcDecoratorName(name: string) {
     return DECORATOR_TRANSFORMS.some((transform) => transform.name === name);
 }
 
-/** Returns a list of all the references to an identifier */
+/**
+ * Returns a list of all the references to an identifier
+ * @param identifier
+ */
 function getReferences(identifier: NodePath<types.Identifier>) {
     return identifier.scope.getBinding(identifier.node.name)!.referencePaths;
 }
 
-/** Returns the type of decorator depdending on the property or method if get applied to */
+/**
+ * Returns the type of decorator depdending on the property or method if get applied to
+ * @param decoratorPath
+ * @param state
+ */
 function getDecoratedNodeType(
     decoratorPath: NodePath<types.Decorator>,
     state: LwcBabelPluginPass
@@ -77,7 +85,10 @@ function validateImportedLwcDecoratorUsage(
                 reference,
             }));
 
-            return [...acc, ...references] as { name: string; reference: NodePath<types.Node> }[];
+            return [...acc, ...references] as {
+                name: string;
+                reference: NodePath<types.Node>;
+            }[];
         }, [] as { name: string; reference: NodePath<types.Node> }[])
         .forEach(({ name, reference }) => {
             // Get the decorator from the identifier
@@ -85,7 +96,7 @@ function validateImportedLwcDecoratorUsage(
             //   - an identifier @track : the decorator is the parent of the identifier
             //   - a call expression @wire("foo") : the decorator is the grand-parent of the identifier
             const decorator = reference.parentPath!.isDecorator()
-                ? reference.parentPath!
+                ? reference.parentPath
                 : reference.parentPath!.parentPath!;
 
             if (!decorator.isDecorator()) {
@@ -121,7 +132,11 @@ function isImportedFromLwcSource(decoratorBinding: Binding) {
     );
 }
 
-/** Validate the usage of decorator by calling each validation function */
+/**
+ * Validate the usage of decorator by calling each validation function
+ * @param decorators
+ * @param state
+ */
 function validate(decorators: DecoratorMeta[], state: LwcBabelPluginPass) {
     for (const { name, path } of decorators) {
         const binding = path.scope.getBinding(name);
@@ -132,7 +147,10 @@ function validate(decorators: DecoratorMeta[], state: LwcBabelPluginPass) {
     DECORATOR_TRANSFORMS.forEach(({ validate }) => validate(decorators, state));
 }
 
-/** Remove import specifiers. It also removes the import statement if the specifier list becomes empty */
+/**
+ * Remove import specifiers. It also removes the import statement if the specifier list becomes empty
+ * @param engineImportSpecifiers
+ */
 function removeImportedDecoratorSpecifiers(
     engineImportSpecifiers: { name: any; path: NodePath<Node> }[]
 ) {
@@ -264,6 +282,20 @@ function decorators({ types: t }: BabelAPI): Visitor<LwcBabelPluginPass> {
                 'body.body'
             ) as NodePath<ClassBodyItem>[];
             if (classBodyItems.length === 0) {
+                return;
+            }
+
+            if (
+                node.superClass === null &&
+                isAPIFeatureEnabled(
+                    APIFeature.SKIP_UNNECESSARY_REGISTER_DECORATORS,
+                    getAPIVersionFromNumber(state.opts.apiVersion)
+                )
+            ) {
+                // Any class exposing a field *must* extend either LightningElement or some other superclass.
+                // Even in the case of superclasses and mixins that expose fields, those must extend something as well.
+                // So we can skip classes without a superclass to avoid adding unnecessary registerDecorators calls.
+                // However, we only do this in later API versions to avoid a breaking change.
                 return;
             }
 

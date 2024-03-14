@@ -1,11 +1,11 @@
 /*
- * Copyright (c) 2018, salesforce.com, inc.
+ * Copyright (c) 2024, Salesforce, Inc.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
  */
 import * as babel from '@babel/core';
-
+import { isAPIFeatureEnabled, APIFeature } from '@lwc/shared';
 import babelClassPropertiesPlugin from '@babel/plugin-proposal-class-properties';
 import babelObjectRestSpreadPlugin from '@babel/plugin-proposal-object-rest-spread';
 import lwcClassTransformPlugin from '@lwc/babel-plugin-component';
@@ -19,6 +19,15 @@ import { NormalizedTransformOptions } from '../options';
 import { TransformResult } from './transformer';
 import type { LwcBabelPluginOptions } from '@lwc/babel-plugin-component';
 
+/**
+ * Transforms a JavaScript file.
+ * @param code The source code to transform
+ * @param filename The source filename, with extension.
+ * @param options Transformation options.
+ * @returns Compiled code
+ * @throws Compilation errors
+ * @example
+ */
 export default function scriptTransform(
     code: string,
     filename: string,
@@ -44,14 +53,14 @@ export default function scriptTransform(
         apiVersion,
     };
 
-    const plugins = [
+    const plugins: babel.PluginItem[] = [
         [lwcClassTransformPlugin, lwcBabelPluginOptions],
         [babelClassPropertiesPlugin, { loose: true }],
-
-        // This plugin should be removed in a future version. The object-rest-spread is
-        // already a stage 4 feature. The LWC compile should leave this syntax untouched.
-        babelObjectRestSpreadPlugin,
     ];
+
+    if (!isAPIFeatureEnabled(APIFeature.DISABLE_OBJECT_REST_SPREAD_TRANSFORMATION, apiVersion)) {
+        plugins.push(babelObjectRestSpreadPlugin);
+    }
 
     if (enableLightningWebSecurityTransforms) {
         plugins.push(
@@ -77,7 +86,17 @@ export default function scriptTransform(
             plugins,
         })!;
     } catch (e) {
-        throw normalizeToCompilerError(TransformerErrors.JS_TRANSFORMER_ERROR, e, { filename });
+        let transformerError = TransformerErrors.JS_TRANSFORMER_ERROR;
+
+        // Sniff for a Babel decorator error, so we can provide a more helpful error message.
+        if (
+            (e as any).code === 'BABEL_TRANSFORM_ERROR' &&
+            (e as any).message?.includes('Decorators are not enabled.') &&
+            /\b(track|api|wire)\b/.test((e as any).message) // sniff for @track/@api/@wire
+        ) {
+            transformerError = TransformerErrors.JS_TRANSFORMER_DECORATOR_ERROR;
+        }
+        throw normalizeToCompilerError(transformerError, e, { filename });
     }
 
     return {

@@ -107,19 +107,10 @@
                                             "raw": "1"
                                         },
                                         {
-                                            "type": "MemberExpression",
-                                            "object": {
-                                                "type": "Identifier",
-                                                "name": "$cmp"
-                                            },
-                                            "property": {
-                                                "type": "Identifier",
-                                                "start": 5,
-                                                "end": 8,
-                                                "name": "bar"
-                                            },
-                                            "computed": false,
-                                            "optional": false
+                                            "type": "Identifier",
+                                            "start": 5,
+                                            "end": 8,
+                                            "name": "bar"
                                         },
                                         {
                                             "type": "Literal",
@@ -232,33 +223,24 @@
                                             "raw": "'flop'"
                                         },
                                         {
-                                            "type": "MemberExpression",
-                                            "object": {
-                                                "type": "Identifier",
-                                                "name": "$cmp"
-                                            },
-                                            "property": {
-                                                "type": "Identifier",
-                                                "start": 91,
-                                                "end": 95,
-                                                "loc": {
-                                                    "start": {
-                                                        "line": 4,
-                                                        "column": 18
-                                                    },
-                                                    "end": {
-                                                        "line": 4,
-                                                        "column": 22
-                                                    }
+                                            "type": "Identifier",
+                                            "start": 91,
+                                            "end": 95,
+                                            "loc": {
+                                                "start": {
+                                                    "line": 4,
+                                                    "column": 18
                                                 },
-                                                "range": [
-                                                    91,
-                                                    95
-                                                ],
-                                                "name": "floo"
+                                                "end": {
+                                                    "line": 4,
+                                                    "column": 22
+                                                }
                                             },
-                                            "computed": false,
-                                            "optional": false
+                                            "range": [
+                                                91,
+                                                95
+                                            ],
+                                            "name": "floo"
                                         },
                                         {
                                             "type": "Literal",
@@ -333,19 +315,19 @@
                             "location": {
                                 "startLine": 4,
                                 "startColumn": 9,
-                                "endLine": 5,
-                                "endColumn": 5,
+                                "endLine": 4,
+                                "endColumn": 37,
                                 "start": 81,
-                                "end": 114
+                                "end": 109
                             }
                         },
                         "location": {
                             "startLine": 4,
                             "startColumn": 9,
-                            "endLine": 5,
-                            "endColumn": 5,
+                            "endLine": 4,
+                            "endColumn": 37,
                             "start": 81,
-                            "end": 114
+                            "end": 109
                         }
                     }
                 ]

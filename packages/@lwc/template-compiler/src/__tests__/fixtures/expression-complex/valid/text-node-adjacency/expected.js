@@ -37,12 +37,14 @@ function tmpl($api, $cmp, $slotset, $ctx) {
       api_element("div", stc2, [
         api_text(api_dynamic_text($cmp.spaceRight) + " "),
       ]),
-      api_element("div", stc3, [api_text(api_dynamic_text($cmp.spaceLeft))]),
+      api_element("div", stc3, [
+        api_text(" " + api_dynamic_text($cmp.spaceLeft)),
+      ]),
       api_element("div", stc4, [
         api_text(api_dynamic_text($cmp.one) + api_dynamic_text($cmp.two)),
       ]),
       api_element("div", stc5, [
-        api_text(api_dynamic_text($cmp.one) + api_dynamic_text($cmp.two)),
+        api_text(" " + api_dynamic_text($cmp.one) + api_dynamic_text($cmp.two)),
       ]),
       api_element("div", stc6, [
         api_text(api_dynamic_text($cmp.one) + api_dynamic_text($cmp.two) + " "),
@@ -51,7 +53,9 @@ function tmpl($api, $cmp, $slotset, $ctx) {
         api_text(api_dynamic_text($cmp.one) + " " + api_dynamic_text($cmp.two)),
       ]),
       api_element("div", stc8, [
-        api_text(api_dynamic_text($cmp.one) + " " + api_dynamic_text($cmp.two)),
+        api_text(
+          " " + api_dynamic_text($cmp.one) + " " + api_dynamic_text($cmp.two)
+        ),
       ]),
       api_element("div", stc9, [
         api_text(

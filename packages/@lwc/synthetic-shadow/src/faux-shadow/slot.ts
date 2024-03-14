@@ -75,7 +75,7 @@ function getFilteredSlotFlattenNodes(slot: HTMLElement): Node[] {
     const childNodes = arrayFromCollection(childNodesGetter.call(slot));
     // Typescript is inferring the wrong function type for this particular
     // overloaded method: https://github.com/Microsoft/TypeScript/issues/27972
-    // @ts-ignore type-mismatch
+    // @ts-expect-error type-mismatch
     return ArrayReduce.call(
         childNodes,
         (seed, child) => {
@@ -106,9 +106,8 @@ export function assignedSlotGetterPatched(this: Element | Text): HTMLSlotElement
 
     /**
      * The node is assigned to a slot if:
-     *  - it has a parent and its parent is a slot element
-     *  - and if the slot owner key is different than the node owner key.
-     *
+     * - it has a parent and its parent is a slot element
+     * - and if the slot owner key is different than the node owner key.
      * When the slot and the slotted node are 2 different shadow trees, the owner keys will be
      * different. When the slot is in a shadow tree and the slotted content is a light DOM node,
      * the light DOM node doesn't have an owner key and therefor the slot owner key will be

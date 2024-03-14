@@ -52,6 +52,7 @@ import {
     BaseElement,
     ElseifBlock,
     ScopedSlotFragment,
+    StaticElement,
 } from '../shared/types';
 import * as t from '../shared/estree';
 import {
@@ -83,7 +84,7 @@ function transform(codeGen: CodeGen): t.Expression {
 
         if (codeGen.staticNodes.has(element) && isElement(element)) {
             // do not process children of static nodes.
-            return codeGen.genStaticElement(element, slotParentName);
+            return codeGen.genStaticElement(element as StaticElement, slotParentName);
         }
 
         const children = transformChildren(element);
@@ -249,7 +250,6 @@ function transform(codeGen: CodeGen): t.Expression {
 
     /**
      * Transforms an IfBlock or ElseifBlock along with both its direct descendants and its 'else' descendants.
-     *
      * @param conditionalParentBlock The IfBlock or ElseifBlock to transform into a conditional expression
      * @param key The key to use for this chain of IfBlock/ElseifBlock branches, if applicable
      * @returns A conditional expression representing the full conditional tree with conditionalParentBlock as the root node
@@ -293,7 +293,7 @@ function transform(codeGen: CodeGen): t.Expression {
         }
 
         let leftExpression: t.Expression;
-        const modifier = ifNode.modifier!;
+        const modifier = ifNode.modifier;
 
         /* istanbul ignore else */
         if (modifier === 'true') {
@@ -546,6 +546,14 @@ function transform(codeGen: CodeGen): t.Expression {
                         const styleAST = styleMapToStyleDeclsAST(styleMap);
                         data.push(t.property(t.identifier('styleDecls'), styleAST));
                     }
+                } else if (name === 'slot') {
+                    let slotValue;
+                    if (isExpression(value)) {
+                        slotValue = codeGen.bindExpression(value);
+                    } else {
+                        slotValue = isStringLiteral(value) ? t.literal(value.value) : t.literal('');
+                    }
+                    data.push(t.property(t.identifier('slotAssignment'), slotValue));
                 } else {
                     rest[name] = computeAttrValue(attr, element, !addSanitizationHook);
                 }
@@ -594,6 +602,12 @@ function transform(codeGen: CodeGen): t.Expression {
             data.push(codeGen.genRef(ref));
         }
 
+        // Properties: lwc:spread directive
+        if (spread) {
+            // spread goes last, so it can be used to override any other properties
+            propsObj.properties.push(t.spreadElement(codeGen.bindExpression(spread.value)));
+            instrumentation?.incrementCounter(CompilerMetrics.LWCSpreadDirective);
+        }
         if (propsObj.properties.length) {
             data.push(t.property(t.identifier('props'), propsObj));
         }
@@ -607,12 +621,6 @@ function transform(codeGen: CodeGen): t.Expression {
                 ),
             ]);
             data.push(t.property(t.identifier('context'), contextObj));
-        }
-
-        // Spread
-        if (spread) {
-            data.push(t.property(t.identifier('spread'), codeGen.bindExpression(spread.value)));
-            instrumentation?.incrementCounter(CompilerMetrics.LWCSpreadDirective);
         }
 
         // Key property on VNode

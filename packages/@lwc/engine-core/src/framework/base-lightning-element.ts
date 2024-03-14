@@ -14,10 +14,13 @@
  */
 import {
     AccessibleElementProperties,
+    APIFeature,
     create,
     defineProperties,
     defineProperty,
+    entries,
     freeze,
+    isAPIFeatureEnabled,
     isFunction,
     isNull,
     isObject,
@@ -26,14 +29,14 @@ import {
     keys,
     setPrototypeOf,
 } from '@lwc/shared';
-import { applyAriaReflection } from '@lwc/aria-reflection';
 
 import { logError } from '../shared/logger';
 import { getComponentTag } from '../shared/format';
+import { ariaReflectionPolyfillDescriptors } from '../libs/aria-reflection/aria-reflection';
 
 import { HTMLElementOriginalDescriptors } from './html-properties';
 import { getWrappedComponentsListener } from './component';
-import { vmBeingConstructed, isBeingConstructed, isInvokingRender } from './invoker';
+import { isBeingConstructed, isInvokingRender, vmBeingConstructed } from './invoker';
 import {
     associateVM,
     getAssociatedVM,
@@ -45,22 +48,24 @@ import {
 } from './vm';
 import { componentValueObserved } from './mutation-tracker';
 import {
-    patchShadowRootWithRestrictions,
-    patchLightningElementPrototypeWithRestrictions,
     patchCustomElementWithRestrictions,
+    patchShadowRootWithRestrictions,
 } from './restrictions';
-import { Template, isUpdatingTemplate, getVMBeingRendered } from './template';
+import { getVMBeingRendered, isUpdatingTemplate, Template } from './template';
 import { HTMLElementConstructor } from './base-bridge-element';
 import { updateComponentValue } from './update-component-value';
 import { markLockerLiveObject } from './membrane';
 import { TemplateStylesheetFactories } from './stylesheet';
 import { instrumentInstance } from './runtime-instrumentation';
+import { applyShadowMigrateMode } from './shadow-migration-mode';
 
 /**
  * This operation is called with a descriptor of an standard html property
  * that a Custom Element can support (including AOM properties), which
  * determines what kind of capabilities the Base Lightning Element should support. When producing the new descriptors
  * for the Base Lightning Element, it also include the reactivity bit, so the standard property is reactive.
+ * @param propName
+ * @param descriptor
  */
 function createBridgeToElementDescriptor(
     propName: string,
@@ -135,68 +140,76 @@ export interface LightningElementConstructor {
 
     delegatesFocus?: boolean;
     renderMode?: 'light' | 'shadow';
+    formAssociated?: boolean;
     shadowSupportMode?: ShadowSupportMode;
     stylesheets: TemplateStylesheetFactories;
 }
 
-type HTMLElementTheGoodParts = Pick<Object, 'toString'> &
-    Pick<
-        HTMLElement,
-        | 'accessKey'
-        | 'addEventListener'
-        | 'children'
-        | 'childNodes'
-        | 'classList'
-        | 'dir'
-        | 'dispatchEvent'
-        | 'draggable'
-        | 'firstChild'
-        | 'firstElementChild'
-        | 'getAttribute'
-        | 'getAttributeNS'
-        | 'getBoundingClientRect'
-        | 'getElementsByClassName'
-        | 'getElementsByTagName'
-        | 'hasAttribute'
-        | 'hasAttributeNS'
-        | 'hidden'
-        | 'id'
-        | 'isConnected'
-        | 'lang'
-        | 'lastChild'
-        | 'lastElementChild'
-        | 'ownerDocument'
-        | 'querySelector'
-        | 'querySelectorAll'
-        | 'removeAttribute'
-        | 'removeAttributeNS'
-        | 'removeEventListener'
-        | 'setAttribute'
-        | 'setAttributeNS'
-        | 'spellcheck'
-        | 'tabIndex'
-        | 'title'
-    >;
+type HTMLElementTheGoodParts = { toString: () => string } & Pick<
+    HTMLElement,
+    | 'accessKey'
+    | 'addEventListener'
+    | 'attachInternals'
+    | 'children'
+    | 'childNodes'
+    | 'classList'
+    | 'dir'
+    | 'dispatchEvent'
+    | 'draggable'
+    | 'firstChild'
+    | 'firstElementChild'
+    | 'getAttribute'
+    | 'getAttributeNS'
+    | 'getBoundingClientRect'
+    | 'getElementsByClassName'
+    | 'getElementsByTagName'
+    | 'hasAttribute'
+    | 'hasAttributeNS'
+    | 'hidden'
+    | 'id'
+    | 'isConnected'
+    | 'lang'
+    | 'lastChild'
+    | 'lastElementChild'
+    | 'ownerDocument'
+    | 'querySelector'
+    | 'querySelectorAll'
+    | 'removeAttribute'
+    | 'removeAttributeNS'
+    | 'removeEventListener'
+    | 'setAttribute'
+    | 'setAttributeNS'
+    | 'shadowRoot'
+    | 'spellcheck'
+    | 'tabIndex'
+    | 'tagName'
+    | 'title'
+>;
 
 type RefNodes = { [name: string]: Element };
 
 const refsCache: WeakMap<RefVNodes, RefNodes> = new WeakMap();
 
 export interface LightningElement extends HTMLElementTheGoodParts, AccessibleElementProperties {
+    constructor: LightningElementConstructor;
     template: ShadowRoot | null;
-    refs: RefNodes;
+    refs: RefNodes | undefined;
     render(): Template;
     connectedCallback?(): void;
     disconnectedCallback?(): void;
     renderedCallback?(): void;
     errorCallback?(error: any, stack: string): void;
+    formAssociatedCallback?(): void;
+    formResetCallback?(): void;
+    formDisabledCallback?(): void;
+    formStateRestoreCallback?(): void;
 }
 
 /**
  * This class is the base class for any LWC element.
  * Some elements directly extends this class, others implement it via inheritance.
- **/
-// @ts-ignore
+ */
+// @ts-expect-error When exported, it will conform, but we need to build it first!
 export const LightningElement: LightningElementConstructor = function (
     this: LightningElement
 ): LightningElement {
@@ -222,7 +235,6 @@ export const LightningElement: LightningElementConstructor = function (
         );
     }
 
-    const component = this;
     setPrototypeOf(elm, bridge.prototype);
 
     vm.component = this;
@@ -241,7 +253,7 @@ export const LightningElement: LightningElementConstructor = function (
     markLockerLiveObject(this);
 
     // Linking elm, shadow root and component with the VM.
-    associateVM(component, vm);
+    associateVM(this, vm);
     associateVM(elm, vm);
 
     if (vm.renderMode === RenderMode.Shadow) {
@@ -280,6 +292,14 @@ function doAttachShadow(vm: VM): ShadowRoot {
         patchShadowRootWithRestrictions(shadowRoot);
     }
 
+    if (
+        process.env.IS_BROWSER &&
+        lwcRuntimeFlags.ENABLE_FORCE_SHADOW_MIGRATE_MODE &&
+        vm.shadowMigrateMode
+    ) {
+        applyShadowMigrateMode(shadowRoot);
+    }
+
     return shadowRoot;
 }
 
@@ -293,8 +313,8 @@ function warnIfInvokedDuringConstruction(vm: VM, methodOrPropName: string) {
     }
 }
 
-// @ts-ignore
-LightningElement.prototype = {
+// Type assertion because we need to build the prototype before it satisfies the interface.
+(LightningElement as { prototype: Partial<LightningElement> }).prototype = {
     constructor: LightningElement,
 
     dispatchEvent(event: Event): boolean {
@@ -458,6 +478,29 @@ LightningElement.prototype = {
         return getBoundingClientRect(elm);
     },
 
+    attachInternals(): ElementInternals {
+        const vm = getAssociatedVM(this);
+        const {
+            elm,
+            apiVersion,
+            renderer: { attachInternals },
+        } = vm;
+
+        if (!isAPIFeatureEnabled(APIFeature.ENABLE_ELEMENT_INTERNALS_AND_FACE, apiVersion)) {
+            throw new Error(
+                `The attachInternals API is only supported in API version 61 and above. ` +
+                    `The current version is ${apiVersion}. ` +
+                    `To use this API, update the LWC component API version. https://lwc.dev/guide/versioning`
+            );
+        }
+
+        if (vm.shadowMode === ShadowMode.Synthetic) {
+            throw new Error('attachInternals API is not supported in synthetic shadow.');
+        }
+
+        return attachInternals(elm);
+    },
+
     get isConnected(): boolean {
         const vm = getAssociatedVM(this);
         const {
@@ -564,7 +607,7 @@ LightningElement.prototype = {
             refsCache.set(refVNodes, refs);
         }
 
-        return refs!;
+        return refs;
     },
 
     // For backwards compat, we allow component authors to set `refs` as an expando
@@ -598,7 +641,10 @@ LightningElement.prototype = {
         if (process.env.NODE_ENV !== 'production') {
             warnIfInvokedDuringConstruction(vm, 'childNodes');
         }
-        return renderer.getChildNodes(vm.elm);
+        // getChildNodes returns a NodeList, which has `item(index: number): Node | null`.
+        // NodeListOf<T> extends NodeList, but claims to not return null. That seems inaccurate,
+        // but these are built-in types, so ultimately not our problem.
+        return renderer.getChildNodes(vm.elm) as NodeListOf<ChildNode>;
     },
 
     get firstChild() {
@@ -644,6 +690,11 @@ LightningElement.prototype = {
             warnIfInvokedDuringConstruction(vm, 'ownerDocument');
         }
         return renderer.ownerDocument(vm.elm);
+    },
+
+    get tagName() {
+        const { elm, renderer } = getAssociatedVM(this);
+        return renderer.getTagName(elm);
     },
 
     render(): Template {
@@ -695,18 +746,25 @@ for (const propName in HTMLElementOriginalDescriptors) {
     );
 }
 
+// Apply ARIA reflection to LightningElement.prototype, on both the browser and server.
+// This allows `this.aria*` property accessors to work from inside a component, and to reflect `aria-*` attrs.
+// Note this works regardless of whether the global ARIA reflection polyfill is applied or not.
+if (process.env.IS_BROWSER) {
+    // In the browser, we use createBridgeToElementDescriptor, so we can get the normal reactivity lifecycle for
+    // aria* properties
+    for (const [propName, descriptor] of entries(ariaReflectionPolyfillDescriptors) as [
+        name: string,
+        descriptor: PropertyDescriptor
+    ][]) {
+        lightningBasedDescriptors[propName] = createBridgeToElementDescriptor(propName, descriptor);
+    }
+} else {
+    // On the server, we cannot use createBridgeToElementDescriptor because getAttribute/setAttribute are
+    // not supported on HTMLElement. So apply the polyfill directly on top of LightningElement
+    defineProperties(LightningElement.prototype, ariaReflectionPolyfillDescriptors);
+}
+
 defineProperties(LightningElement.prototype, lightningBasedDescriptors);
-
-function applyAriaReflectionToLightningElement() {
-    // If ARIA reflection is not applied globally to Element.prototype, or if we are running server-side,
-    // apply it to LightningElement.prototype.
-    // This allows `this.aria*` property accessors to work from inside a component, and to reflect `aria-*` attrs.
-    applyAriaReflection(LightningElement.prototype);
-}
-
-if (!process.env.IS_BROWSER || lwcRuntimeFlags.DISABLE_ARIA_REFLECTION_POLYFILL) {
-    applyAriaReflectionToLightningElement();
-}
 
 defineProperty(LightningElement, 'CustomElementConstructor', {
     get() {
@@ -715,7 +773,3 @@ defineProperty(LightningElement, 'CustomElementConstructor', {
     },
     configurable: true,
 });
-
-if (process.env.NODE_ENV !== 'production') {
-    patchLightningElementPrototypeWithRestrictions(LightningElement.prototype);
-}

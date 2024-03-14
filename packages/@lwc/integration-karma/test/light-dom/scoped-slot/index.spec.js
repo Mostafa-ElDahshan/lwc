@@ -1,10 +1,13 @@
 import { createElement } from 'lwc';
+import { USE_LIGHT_DOM_SLOT_FORWARDING, USE_COMMENTS_FOR_FRAGMENT_BOOKENDS } from 'test-utils';
 
 import BasicParent from 'x/basicParent';
 import ParentOfChildWithForEach from 'x/parentOfChildWithForEach';
 import ParentWNoSlotContent from 'x/parentWNoSlotContent';
 import ParentOfChildWithNamedSlots from 'x/parentOfChildWithNamedSlots';
 import NestedSlots from 'x/nestedSlots';
+
+const vFragBookend = USE_COMMENTS_FOR_FRAGMENT_BOOKENDS ? '<!---->' : '';
 
 describe('scoped slots', () => {
     it('scoped slots work with default slots', () => {
@@ -46,13 +49,23 @@ describe('scoped slots', () => {
 
         const child = elm.shadowRoot.querySelector('x-child-with-named-slots');
         // Verify scoped slots
-        expect(child.querySelector('.slotname1').innerHTML).toBe('<p>2021 World Series</p>');
-        expect(child.querySelector('.slotname2').innerHTML).toBe('<p>Houston Astros</p>');
-        expect(child.querySelector('.defaultslot').innerHTML).toBe('<p>Atlanta Braves</p>');
+        expect(child.querySelector('.slotname1').innerHTML).toBe(
+            `${vFragBookend}${vFragBookend}<p>2021 World Series</p>${vFragBookend}${vFragBookend}`
+        );
+        expect(child.querySelector('.slotname2').innerHTML).toBe(
+            `${vFragBookend}${vFragBookend}<p>Houston Astros</p>${vFragBookend}${vFragBookend}`
+        );
+        expect(child.querySelector('.defaultslot').innerHTML).toBe(
+            `${vFragBookend}${vFragBookend}<p>Atlanta Braves</p>${vFragBookend}${vFragBookend}`
+        );
         // verify standard slot type
         // For standard slot content, "slot" attribute goes directly on the element unlike scoped
         //  slots where the attribute goes on the template tag
-        expect(child.querySelector('.slotname3').innerHTML).toBe('<p slot="slotname3">MLB</p>');
+        expect(child.querySelector('.slotname3').innerHTML).toBe(
+            USE_LIGHT_DOM_SLOT_FORWARDING
+                ? `${vFragBookend}<p>MLB</p>${vFragBookend}`
+                : `${vFragBookend}<p slot="slotname3">MLB</p>${vFragBookend}`
+        );
     });
 
     it('scoped slot content can be nested inside another', () => {

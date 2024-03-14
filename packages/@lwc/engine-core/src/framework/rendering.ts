@@ -23,16 +23,14 @@ import {
 
 import { logError } from '../shared/logger';
 import { getComponentTag } from '../shared/format';
-import { LifecycleCallback, RendererAPI } from './renderer';
-import { EmptyArray } from './utils';
+import { RendererAPI } from './renderer';
+import { EmptyArray, shouldBeFormAssociated, shouldUseNativeCustomElementLifecycle } from './utils';
 import { markComponentAsDirty } from './component';
 import { getScopeTokenClass } from './stylesheet';
 import { lockDomMutation, patchElementWithRestrictions, unlockDomMutation } from './restrictions';
 import {
     appendVM,
-    connectRootElement,
     createVM,
-    disconnectRootElement,
     getAssociatedVMIfPresent,
     LwcDomMode,
     removeVM,
@@ -49,6 +47,7 @@ import {
     isVCustomElement,
     isVFragment,
     isVScopedSlotFragment,
+    isVStatic,
     Key,
     VBaseElement,
     VComment,
@@ -62,13 +61,16 @@ import {
     VText,
 } from './vnodes';
 
-import { patchAttributes } from './modules/attrs';
+import { patchAttributes, patchSlotAssignment } from './modules/attrs';
 import { patchProps } from './modules/props';
 import { patchClassAttribute } from './modules/computed-class-attr';
 import { patchStyleAttribute } from './modules/computed-style-attr';
 import { applyEventListeners } from './modules/events';
 import { applyStaticClassAttribute } from './modules/static-class-attr';
 import { applyStaticStyleAttribute } from './modules/static-style-attr';
+import { applyRefs } from './modules/refs';
+import { mountStaticParts, patchStaticParts } from './modules/static-parts';
+import { LightningElementConstructor } from './base-lightning-element';
 
 export function patchChildren(
     c1: VNodes,
@@ -118,7 +120,7 @@ function patch(n1: VNode, n2: VNode, parent: ParentNode, renderer: RendererAPI) 
             break;
 
         case VNodeType.Static:
-            n2.elm = (n1 as VStatic).elm;
+            patchStatic(n1 as VStatic, n2, renderer);
             break;
 
         case VNodeType.Fragment:
@@ -256,16 +258,25 @@ function mountElement(
     applyDomManual(elm, vnode);
     applyElementRestrictions(elm, vnode);
 
-    patchElementPropsAndAttrs(null, vnode, renderer);
+    patchElementPropsAndAttrsAndRefs(null, vnode, renderer);
 
     insertNode(elm, parent, anchor, renderer);
     mountVNodes(vnode.children, elm, renderer, null);
 }
 
+function patchStatic(n1: VStatic, n2: VStatic, renderer: RendererAPI) {
+    n2.elm = n1.elm!;
+
+    // slotAssignments can only apply to the top level element, never to a static part.
+    patchSlotAssignment(n1, n2, renderer);
+    // The `refs` object is blown away in every re-render, so we always need to re-apply them
+    patchStaticParts(n1, n2);
+}
+
 function patchElement(n1: VElement, n2: VElement, renderer: RendererAPI) {
     const elm = (n2.elm = n1.elm!);
 
-    patchElementPropsAndAttrs(n1, n2, renderer);
+    patchElementPropsAndAttrsAndRefs(n1, n2, renderer);
     patchChildren(n1.children, n2.children, elm, renderer);
 }
 
@@ -287,13 +298,14 @@ function mountStatic(
 
     if (isSyntheticShadowDefined) {
         if (shadowMode === ShadowMode.Synthetic || renderMode === RenderMode.Light) {
-            (elm as any)[KEY__SHADOW_STATIC] = true;
+            elm[KEY__SHADOW_STATIC] = true;
         }
     }
 
+    // slotAssignments can only apply to the top level element, never to a static part.
+    patchSlotAssignment(null, vnode, renderer);
     insertNode(elm, parent, anchor, renderer);
-    // Event listeners are only applied once when mounting, so they are allowed for static vnodes
-    applyEventListeners(vnode, renderer);
+    mountStaticParts(elm, vnode, renderer);
 }
 
 function mountCustomElement(
@@ -302,7 +314,7 @@ function mountCustomElement(
     anchor: Node | null,
     renderer: RendererAPI
 ) {
-    const { sel, owner } = vnode;
+    const { sel, owner, ctor } = vnode;
     const { createCustomElement } = renderer;
     /**
      * Note: if the upgradable constructor does not expect, or throw when we new it
@@ -317,28 +329,20 @@ function mountCustomElement(
         vm = createViewModelHook(elm, vnode, renderer);
     };
 
-    let connectedCallback: LifecycleCallback | undefined;
-    let disconnectedCallback: LifecycleCallback | undefined;
-
-    if (lwcRuntimeFlags.ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE) {
-        connectedCallback = (elm: HTMLElement) => {
-            connectRootElement(elm);
-        };
-        disconnectedCallback = (elm: HTMLElement) => {
-            disconnectRootElement(elm);
-        };
-    }
-
     // Should never get a tag with upper case letter at this point; the compiler
     // should produce only tags with lowercase letters. However, the Java
     // compiler may generate tagnames with uppercase letters so - for backwards
     // compatibility, we lower case the tagname here.
     const normalizedTagname = sel.toLowerCase();
+    const useNativeLifecycle = shouldUseNativeCustomElementLifecycle(
+        ctor as LightningElementConstructor
+    );
+    const isFormAssociated = shouldBeFormAssociated(ctor);
     const elm = createCustomElement(
         normalizedTagname,
         upgradeCallback,
-        connectedCallback,
-        disconnectedCallback
+        useNativeLifecycle,
+        isFormAssociated
     );
 
     vnode.elm = elm;
@@ -351,12 +355,12 @@ function mountCustomElement(
         allocateChildren(vnode, vm);
     }
 
-    patchElementPropsAndAttrs(null, vnode, renderer);
+    patchElementPropsAndAttrsAndRefs(null, vnode, renderer);
     insertNode(elm, parent, anchor, renderer);
 
     if (vm) {
         if (process.env.IS_BROWSER) {
-            if (!lwcRuntimeFlags.ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE) {
+            if (!useNativeLifecycle) {
                 if (process.env.NODE_ENV !== 'production') {
                     // With synthetic lifecycle callbacks, it's possible for elements to be removed without the engine
                     // noticing it (e.g. `appendChild` the same host element twice). This test ensures we don't regress.
@@ -397,7 +401,7 @@ function patchCustomElement(
         const elm = (n2.elm = n1.elm!);
         const vm = (n2.vm = n1.vm);
 
-        patchElementPropsAndAttrs(n1, n2, renderer);
+        patchElementPropsAndAttrsAndRefs(n1, n2, renderer);
         if (!isUndefined(vm)) {
             // in fallback mode, the allocation will always set children to
             // empty and delegate the real allocation to the slot elements
@@ -466,17 +470,18 @@ function unmount(
 
     // When unmounting a VNode subtree not all the elements have to removed from the DOM. The
     // subtree root, is the only element worth unmounting from the subtree.
-    if (doRemove) {
-        if (type === VNodeType.Fragment) {
-            unmountVNodes(vnode.children, parent, renderer, doRemove);
-        } else {
-            // The vnode might or might not have a data.renderer associated to it
-            // but the removal used here is from the owner instead.
-            removeNode(elm!, parent, renderer);
-        }
+    if (doRemove && type !== VNodeType.Fragment) {
+        // The vnode might or might not have a data.renderer associated to it
+        // but the removal used here is from the owner instead.
+        removeNode(elm!, parent, renderer);
     }
 
     switch (type) {
+        case VNodeType.Fragment: {
+            unmountVNodes(vnode.children, parent, renderer, doRemove);
+            break;
+        }
+
         case VNodeType.Element: {
             // Slot content is removed to trigger slotchange event when removing slot.
             // Only required for synthetic shadow.
@@ -536,7 +541,7 @@ function updateTextContent(vnode: VText | VComment, renderer: RendererAPI) {
     if (process.env.NODE_ENV !== 'production') {
         unlockDomMutation();
     }
-    setText(elm, text!);
+    setText(elm, text);
     if (process.env.NODE_ENV !== 'production') {
         lockDomMutation();
     }
@@ -589,7 +594,7 @@ export function removeNode(node: Node, parent: ParentNode, renderer: RendererAPI
     }
 }
 
-function patchElementPropsAndAttrs(
+function patchElementPropsAndAttrsAndRefs(
     oldVnode: VBaseElement | null,
     vnode: VBaseElement,
     renderer: RendererAPI
@@ -607,22 +612,45 @@ function patchElementPropsAndAttrs(
 
     patchAttributes(oldVnode, vnode, renderer);
     patchProps(oldVnode, vnode, renderer);
+    patchSlotAssignment(oldVnode, vnode, renderer);
+
+    // The `refs` object is blown away in every re-render, so we always need to re-apply them
+    applyRefs(vnode, vnode.owner);
 }
 
 function applyStyleScoping(elm: Element, owner: VM, renderer: RendererAPI) {
+    const { getClassList } = renderer;
+
     // Set the class name for `*.scoped.css` style scoping.
-    const scopeToken = getScopeTokenClass(owner);
+    const scopeToken = getScopeTokenClass(owner, /* legacy */ false);
     if (!isNull(scopeToken)) {
-        const { getClassList } = renderer;
         // TODO [#2762]: this dot notation with add is probably problematic
         // probably we should have a renderer api for just the add operation
         getClassList(elm).add(scopeToken);
     }
 
+    // TODO [#3733]: remove support for legacy scope tokens
+    if (lwcRuntimeFlags.ENABLE_LEGACY_SCOPE_TOKENS) {
+        const legacyScopeToken = getScopeTokenClass(owner, /* legacy */ true);
+        if (!isNull(legacyScopeToken)) {
+            // TODO [#2762]: this dot notation with add is probably problematic
+            // probably we should have a renderer api for just the add operation
+            getClassList(elm).add(legacyScopeToken);
+        }
+    }
+
     // Set property element for synthetic shadow DOM style scoping.
     const { stylesheetToken: syntheticToken } = owner.context;
-    if (owner.shadowMode === ShadowMode.Synthetic && !isUndefined(syntheticToken)) {
-        (elm as any).$shadowToken$ = syntheticToken;
+    if (owner.shadowMode === ShadowMode.Synthetic) {
+        if (!isUndefined(syntheticToken)) {
+            (elm as any).$shadowToken$ = syntheticToken;
+        }
+        if (lwcRuntimeFlags.ENABLE_LEGACY_SCOPE_TOKENS) {
+            const legacyToken = owner.context.legacyStylesheetToken;
+            if (!isUndefined(legacyToken)) {
+                (elm as any).$legacyShadowToken$ = legacyToken;
+            }
+        }
     }
 }
 
@@ -704,6 +732,7 @@ export function allocateChildren(vnode: VCustomElement, vm: VM) {
  * With the delimiters removed, the contents are marked dynamic so they are diffed correctly.
  *
  * This function is used for slotted VFragments to avoid the text delimiters interfering with slotting functionality.
+ * @param children
  */
 function flattenFragmentsInChildren(children: VNodes): VNodes {
     const flattenedChildren: VNodes = [];
@@ -783,8 +812,8 @@ function allocateInSlot(vm: VM, children: VNodes, owner: VM) {
         }
 
         let slotName: unknown = '';
-        if (isVBaseElement(vnode)) {
-            slotName = vnode.data.attrs?.slot ?? '';
+        if (isVBaseElement(vnode) || isVStatic(vnode)) {
+            slotName = vnode.slotAssignment ?? '';
         } else if (isVScopedSlotFragment(vnode)) {
             slotName = vnode.slotName;
         }
@@ -793,6 +822,7 @@ function allocateInSlot(vm: VM, children: VNodes, owner: VM) {
         // but elm.setAttribute('slot', Symbol(1)) is an error.
         // the following line also throws same error for symbols
         // Similar for Object.create(null)
+        // eslint-disable-next-line @typescript-eslint/restrict-plus-operands
         const normalizedSlotName = '' + slotName;
 
         const vnodes: VNodes = (cmpSlotsMapping[normalizedSlotName] =
@@ -830,13 +860,12 @@ function allocateInSlot(vm: VM, children: VNodes, owner: VM) {
     }
 }
 
-// Using a WeakMap instead of a WeakSet because this one works in IE11 :(
-const DynamicChildren: WeakMap<VNodes, 1> = new WeakMap();
+const DynamicChildren: WeakSet<VNodes> = new WeakSet();
 
 // dynamic children means it was either generated by an iteration in a template
 // or part of an unstable fragment, and will require a more complex diffing algo.
 export function markAsDynamicChildren(children: VNodes) {
-    DynamicChildren.set(children, 1);
+    DynamicChildren.add(children);
 }
 
 function hasDynamicChildren(children: VNodes): boolean {

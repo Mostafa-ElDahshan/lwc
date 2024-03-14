@@ -10,25 +10,20 @@ const stc1 = {
   key: 3,
 };
 const stc2 = {
+  slotAssignment: "forward",
   attrs: {
     name: "forwarded",
-    slot: "forward",
   },
   key: 4,
 };
 function tmpl($api, $cmp, $slotset, $ctx) {
-  const {
-    st: api_static_fragment,
-    t: api_text,
-    s: api_slot,
-    f: api_flatten,
-  } = $api;
-  return api_flatten([
+  const { st: api_static_fragment, t: api_text, s: api_slot } = $api;
+  return [
     api_static_fragment($fragment1(), 1),
     api_slot("", stc0, [api_text("Default")], $slotset),
     api_slot("named", stc1, [api_text("Named")], $slotset),
     api_slot("forwarded", stc2, [api_text("Forwarded")], $slotset),
-  ]);
+  ];
   /*LWC compiler vX.X.X*/
 }
 export default registerTemplate(tmpl);

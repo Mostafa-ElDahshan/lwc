@@ -16,12 +16,15 @@ import {
     ArrayIncludes,
     isTrue,
     isString,
+    StringToLowerCase,
+    APIFeature,
+    isAPIFeatureEnabled,
 } from '@lwc/shared';
 
 import { logError, logWarn } from '../shared/logger';
 
 import { RendererAPI } from './renderer';
-import { cloneAndOmitKey, parseStyleText } from './utils';
+import { cloneAndOmitKey, parseStyleText, shouldBeFormAssociated } from './utils';
 import { allocateChildren, mount, removeNode } from './rendering';
 import {
     createVM,
@@ -31,6 +34,7 @@ import {
     LwcDomMode,
     VM,
     runRenderedCallback,
+    resetRefVNodes,
 } from './vm';
 import {
     VNodes,
@@ -48,8 +52,10 @@ import {
 
 import { patchProps } from './modules/props';
 import { applyEventListeners } from './modules/events';
+import { mountStaticParts } from './modules/static-parts';
 import { getScopeTokenClass, getStylesheetTokenHost } from './stylesheet';
 import { renderComponent } from './component';
+import { applyRefs } from './modules/refs';
 
 // These values are the ones from Node.nodeType (https://developer.mozilla.org/en-US/docs/Web/API/Node/nodeType)
 const enum EnvNodeTypes {
@@ -78,11 +84,14 @@ function hydrateVM(vm: VM) {
     const children = renderComponent(vm);
     vm.children = children;
 
+    // reset the refs; they will be set during `hydrateChildren`
+    resetRefVNodes(vm);
+
     const {
         renderRoot: parentNode,
         renderer: { getFirstChild },
     } = vm;
-    hydrateChildren(getFirstChild(parentNode), children, parentNode, vm);
+    hydrateChildren(getFirstChild(parentNode), children, parentNode, vm, false);
     runRenderedCallback(vm);
 }
 
@@ -218,7 +227,8 @@ function hydrateStaticElement(elm: Node, vnode: VStatic, renderer: RendererAPI):
     }
 
     vnode.elm = elm;
-    applyEventListeners(vnode, renderer);
+
+    mountStaticParts(elm, vnode, renderer);
 
     return elm;
 }
@@ -226,7 +236,7 @@ function hydrateStaticElement(elm: Node, vnode: VStatic, renderer: RendererAPI):
 function hydrateFragment(elm: Node, vnode: VFragment, renderer: RendererAPI): Node | null {
     const { children, owner } = vnode;
 
-    hydrateChildren(elm, children, renderer.getProperty(elm, 'parentNode'), owner);
+    hydrateChildren(elm, children, renderer.getProperty(elm, 'parentNode'), owner, true);
 
     return (vnode.elm = children[children.length - 1]!.elm as Node);
 }
@@ -275,11 +285,11 @@ function hydrateElement(elm: Node, vnode: VElement, renderer: RendererAPI): Node
         }
     }
 
-    patchElementPropsAndAttrs(vnode, renderer);
+    patchElementPropsAndAttrsAndRefs(vnode, renderer);
 
     if (!isDomManual) {
         const { getFirstChild } = renderer;
-        hydrateChildren(getFirstChild(elm), vnode.children, elm, owner);
+        hydrateChildren(getFirstChild(elm), vnode.children, elm, owner, false);
     }
 
     return elm;
@@ -310,6 +320,9 @@ function hydrateCustomElement(
     }
 
     const { sel, mode, ctor, owner } = vnode;
+    const { defineCustomElement, getTagName } = renderer;
+    const isFormAssociated = shouldBeFormAssociated(ctor);
+    defineCustomElement(StringToLowerCase.call(getTagName(elm)), isFormAssociated);
 
     const vm = createVM(elm, ctor, renderer, {
         mode,
@@ -318,11 +331,11 @@ function hydrateCustomElement(
         hydrated: true,
     });
 
-    vnode.elm = elm as Element;
+    vnode.elm = elm;
     vnode.vm = vm;
 
     allocateChildren(vnode, vm);
-    patchElementPropsAndAttrs(vnode, renderer);
+    patchElementPropsAndAttrsAndRefs(vnode, renderer);
 
     // Insert hook section:
     if (process.env.NODE_ENV !== 'production') {
@@ -334,7 +347,7 @@ function hydrateCustomElement(
         const { getFirstChild } = renderer;
         // VM is not rendering in Light DOM, we can proceed and hydrate the slotted content.
         // Note: for Light DOM, this is handled while hydrating the VM
-        hydrateChildren(getFirstChild(elm), vnode.children, elm as Element, vm);
+        hydrateChildren(getFirstChild(elm), vnode.children, elm, vm, false);
     }
 
     hydrateVM(vm);
@@ -345,7 +358,11 @@ function hydrateChildren(
     node: Node | null,
     children: VNodes,
     parentNode: Element | ShadowRoot,
-    owner: VM
+    owner: VM,
+    // When rendering the children of a VFragment, additional siblings may follow the
+    // last node of the fragment. Hydration should not fail if a trailing sibling is
+    // found in this case.
+    expectAddlSiblings: boolean
 ) {
     let hasWarned = false;
     let nextNode: Node | null = node;
@@ -373,7 +390,21 @@ function hydrateChildren(
         }
     }
 
-    if (nextNode) {
+    const useCommentsForBookends = isAPIFeatureEnabled(
+        APIFeature.USE_COMMENTS_FOR_FRAGMENT_BOOKENDS,
+        owner.apiVersion
+    );
+    if (
+        // If 1) comments are used for bookends, and 2) we're not expecting additional siblings,
+        // and 3) there exists an additional sibling, that's a hydration failure.
+        //
+        // This preserves the previous behavior for text-node bookends where mismatches
+        // would incorrectly occur but which is unfortunately baked into the SSR hydration
+        // contract. It also preserves the behavior of valid hydration failures where the server
+        // rendered more nodes than the client.
+        (!useCommentsForBookends || !expectAddlSiblings) &&
+        nextNode
+    ) {
         hasMismatch = true;
         if (process.env.NODE_ENV !== 'production') {
             if (!hasWarned) {
@@ -406,9 +437,11 @@ function handleMismatch(node: Node, vnode: VNode, renderer: RendererAPI): Node |
     return vnode.elm!;
 }
 
-function patchElementPropsAndAttrs(vnode: VBaseElement, renderer: RendererAPI) {
+function patchElementPropsAndAttrsAndRefs(vnode: VBaseElement, renderer: RendererAPI) {
     applyEventListeners(vnode, renderer);
     patchProps(null, vnode, renderer);
+    // The `refs` object is blown away in every re-render, so we always need to re-apply them
+    applyRefs(vnode, vnode.owner);
 }
 
 function hasCorrectNodeType<T extends Node>(
@@ -525,7 +558,8 @@ function validateClassAttr(vnode: VBaseElement, elm: Element, renderer: Renderer
     const { data, owner } = vnode;
     let { className, classMap } = data;
     const { getProperty, getClassList, getAttribute } = renderer;
-    const scopedToken = getScopeTokenClass(owner);
+    // we don't care about legacy for hydration. it's a new use case
+    const scopedToken = getScopeTokenClass(owner, /* legacy */ false);
     const stylesheetTokenHost = isVCustomElement(vnode) ? getStylesheetTokenHost(vnode) : null;
 
     // Classnames for scoped CSS are added directly to the DOM during rendering,

@@ -1,15 +1,13 @@
-import {
-    createElement,
-    LightningElement,
-    registerTemplate,
-    registerComponent,
-    __unstable__ReportingControl as reportingControl,
-} from 'lwc';
+import { createElement, LightningElement, registerTemplate, registerComponent } from 'lwc';
+import { attachReportingControlDispatcher, detachReportingControlDispatcher } from 'test-utils';
+
 import Component from 'x/component';
 import ComponentWithProp from 'x/componentWithProp';
 import ComponentWithTemplateAndStylesheet from 'x/componentWithTemplateAndStylesheet';
 
-if (!process.env.COMPAT) {
+// This test doesn't make sense if we are explicitly forcing a mismatch for the test
+// TODO [#3974]: remove temporary logic to support v5 compiler + v6+ engine
+if (!process.env.FORCE_LWC_V5_COMPILER_FOR_TEST) {
     describe('compiler version mismatch', () => {
         describe('stamped with version number', () => {
             it('component', () => {
@@ -51,11 +49,11 @@ if (!process.env.COMPAT) {
             beforeEach(() => {
                 window.__lwcResetWarnedOnVersionMismatch();
                 dispatcher = jasmine.createSpy();
-                reportingControl.attachDispatcher(dispatcher);
+                attachReportingControlDispatcher(dispatcher, 'CompilerRuntimeVersionMismatch');
             });
 
             afterEach(() => {
-                reportingControl.detachDispatcher();
+                detachReportingControlDispatcher();
             });
 
             it('template', () => {
@@ -90,6 +88,7 @@ if (!process.env.COMPAT) {
                 function tmpl() {
                     return [];
                 }
+
                 tmpl.stylesheetToken = 'x-component_component';
                 tmpl.stylesheets = [
                     function stylesheet() {
@@ -98,7 +97,9 @@ if (!process.env.COMPAT) {
                     },
                 ];
                 registerTemplate(tmpl);
+
                 class CustomElement extends LightningElement {}
+
                 registerComponent(CustomElement, { tmpl });
 
                 const elm = createElement('x-component', { is: CustomElement });

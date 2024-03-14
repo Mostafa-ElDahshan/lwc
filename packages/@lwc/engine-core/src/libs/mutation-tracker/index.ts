@@ -77,6 +77,7 @@ export class ReactiveObserver {
 
     observe(job: JobFunction) {
         const inceptionReactiveRecord = currentReactiveObserver;
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         currentReactiveObserver = this;
         let error;
         try {
@@ -124,5 +125,9 @@ export class ReactiveObserver {
         ArrayPush.call(reactiveObservers, this);
         // we keep track of observing records where the observing record was added to so we can do some clean up later on
         ArrayPush.call(this.listeners, reactiveObservers);
+    }
+
+    isObserving() {
+        return currentReactiveObserver === this;
     }
 }

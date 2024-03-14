@@ -1,10 +1,11 @@
 /*
- * Copyright (c) 2018, salesforce.com, inc.
+ * Copyright (c) 2023, Salesforce.com, inc.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
  */
 import {
+    APIVersion,
     ArrayPush,
     ArraySlice,
     ArrayUnshift,
@@ -25,9 +26,20 @@ import { addErrorComponentStack } from '../shared/error';
 import { logError, logWarnOnce } from '../shared/logger';
 
 import { HostNode, HostElement, RendererAPI } from './renderer';
-import { renderComponent, markComponentAsDirty, getTemplateReactiveObserver } from './component';
-import { addCallbackToNextTick, EmptyArray, EmptyObject, flattenStylesheets } from './utils';
-import { invokeServiceHook, Services } from './services';
+import {
+    renderComponent,
+    markComponentAsDirty,
+    getTemplateReactiveObserver,
+    getComponentAPIVersion,
+    resetTemplateObserverAndUnsubscribe,
+} from './component';
+import {
+    addCallbackToNextTick,
+    EmptyArray,
+    EmptyObject,
+    flattenStylesheets,
+    shouldUseNativeCustomElementLifecycle,
+} from './utils';
 import { invokeComponentCallback, invokeComponentConstructor } from './invoker';
 import { Template } from './template';
 import { ComponentDef, getComponentInternalDef } from './def';
@@ -49,9 +61,10 @@ import {
     VNodeType,
     VBaseElement,
     isVFragment,
-    VStatic,
+    VStaticPart,
 } from './vnodes';
 import { StylesheetFactory, TemplateStylesheetFactories } from './stylesheet';
+import { isReportingEnabled, report, ReportingEventId } from './reporting';
 
 type ShadowRootMode = 'open' | 'closed';
 
@@ -84,6 +97,7 @@ export const enum ShadowMode {
 export const enum ShadowSupportMode {
     Any = 'any',
     Default = 'reset',
+    Native = 'native',
 }
 
 export const enum LwcDomMode {
@@ -97,12 +111,21 @@ export interface Context {
     hasTokenInClass: boolean | undefined;
     /** True if a stylesheetToken was added to the host attributes */
     hasTokenInAttribute: boolean | undefined;
+    /** The legacy string used for synthetic shadow DOM and light DOM style scoping. */
+    // TODO [#3733]: remove support for legacy scope tokens
+    legacyStylesheetToken: string | undefined;
+    /** True if a legacyStylesheetToken was added to the host class */
+    hasLegacyTokenInClass: boolean | undefined;
+    /** True if a legacyStylesheetToken was added to the host attributes */
+    hasLegacyTokenInAttribute: boolean | undefined;
     /** Whether or not light DOM scoped styles are present in the stylesheets. */
     hasScopedStyles: boolean | undefined;
     /** The VNodes injected in all the shadow trees to apply the associated component stylesheets. */
     styleVNodes: VNode[] | null;
-    /** Object used by the template function to store information that can be reused between
-     *  different render cycle of the same template. */
+    /**
+     * Object used by the template function to store information that can be reused between
+     * different render cycle of the same template.
+     */
     tplCache: TemplateCache;
     /** List of wire hooks that are invoked when the component gets connected. */
     wiredConnecting: Array<() => void>;
@@ -110,7 +133,7 @@ export interface Context {
     wiredDisconnecting: Array<() => void>;
 }
 
-export type RefVNodes = { [name: string]: VBaseElement | VStatic };
+export type RefVNodes = { [name: string]: VBaseElement | VStaticPart };
 
 export interface VM<N = HostNode, E = HostElement> {
     /** The host element */
@@ -130,6 +153,8 @@ export interface VM<N = HostNode, E = HostElement> {
     /** Rendering operations associated with the VM */
     renderMode: RenderMode;
     shadowMode: ShadowMode;
+    /** True if shadow migrate mode is in effect, i.e. this is native with synthetic-like modifications */
+    shadowMigrateMode: boolean;
     /** The component creation index. */
     idx: number;
     /** Component state, analogous to Element.isConnected */
@@ -139,14 +164,18 @@ export interface VM<N = HostNode, E = HostElement> {
     children: VNodes;
     /** The list of adopted children VNodes. */
     aChildren: VNodes;
-    /** The list of custom elements VNodes currently rendered in the shadow tree. We keep track of
+    /**
+     * The list of custom elements VNodes currently rendered in the shadow tree. We keep track of
      * those elements to efficiently unmount them when the parent component is disconnected without
-     * having to traverse the VNode tree. */
+     * having to traverse the VNode tree.
+     */
     velements: VCustomElement[];
     /** The component public properties. */
     cmpProps: { [name: string]: any };
-    /** Contains information about the mapping between the slot names and the slotted VNodes, and
-     *  the owner of the slot content. */
+    /**
+     * Contains information about the mapping between the slot names and the slotted VNodes, and
+     * the owner of the slot content.
+     */
     cmpSlots: SlotSet;
     /** The component internal reactive properties. */
     cmpFields: { [name: string]: any };
@@ -162,29 +191,44 @@ export interface VM<N = HostNode, E = HostElement> {
     component: LightningElement;
     /** The custom element shadow root. */
     shadowRoot: ShadowRoot | null;
-    /** The component render root. If the component is a shadow DOM component, it is its shadow
-     * root. If the component is a light DOM component it the element itself. */
+    /**
+     * The component render root. If the component is a shadow DOM component, it is its shadow
+     * root. If the component is a light DOM component it the element itself.
+     */
     renderRoot: ShadowRoot | HostElement;
     /** The template reactive observer. */
     tro: ReactiveObserver;
-    /** Hook invoked whenever a property is accessed on the host element. This hook is used by
-     *  Locker only. */
+    /**
+     * Hook invoked whenever a property is accessed on the host element. This hook is used by
+     * Locker only.
+     */
     setHook: (cmp: LightningElement, prop: PropertyKey, newValue: any) => void;
-    /** Hook invoked whenever a property is set on the host element. This hook is used by Locker
-     *  only. */
+    /**
+     * Hook invoked whenever a property is set on the host element. This hook is used by Locker
+     * only.
+     */
     getHook: (cmp: LightningElement, prop: PropertyKey) => any;
-    /** Hook invoked whenever a method is called on the component (life-cycle hooks, public
-     *  properties and event handlers). This hook is used by Locker. */
+    /**
+     * Hook invoked whenever a method is called on the component (life-cycle hooks, public
+     * properties and event handlers). This hook is used by Locker.
+     */
     callHook: (cmp: LightningElement | undefined, fn: (...args: any[]) => any, args?: any[]) => any;
     /**
-     * Renderer API */
+     * Renderer API
+     */
     renderer: RendererAPI;
     /**
-     * Debug info bag. Stores useful debug information about the component. */
+     * Debug info bag. Stores useful debug information about the component.
+     */
     debugInfo?: Record<string, any>;
     /**
-     * Any stylesheets associated with the component */
+     * Any stylesheets associated with the component
+     */
     stylesheets: TemplateStylesheetFactories | null;
+    /**
+     * API version associated with this VM
+     */
+    apiVersion: APIVersion;
 }
 
 type VMAssociable = HostNode | LightningElement;
@@ -246,9 +290,8 @@ function resetComponentStateWhenRemoved(vm: VM) {
     const { state } = vm;
 
     if (state !== VMState.disconnected) {
-        const { tro } = vm;
         // Making sure that any observing record will not trigger the rehydrated on this vm
-        tro.reset();
+        resetTemplateObserverAndUnsubscribe(vm);
         runDisconnectedCallback(vm);
         // Spec: https://dom.spec.whatwg.org/#concept-node-remove (step 14-15)
         runChildNodesDisconnectedCallback(vm);
@@ -260,16 +303,22 @@ function resetComponentStateWhenRemoved(vm: VM) {
 // old vnode.children is removed from the DOM.
 export function removeVM(vm: VM) {
     if (process.env.NODE_ENV !== 'production') {
-        assert.isTrue(
-            vm.state === VMState.connected || vm.state === VMState.disconnected,
-            `${vm} must have been connected.`
-        );
+        if (!shouldUseNativeCustomElementLifecycle(vm.component.constructor)) {
+            // With native lifecycle, we cannot be certain that connectedCallback was called before a component
+            // was removed from the VDOM. If the component is disconnected, then connectedCallback will not fire
+            // in native mode, although it will fire in synthetic mode due to appendChild triggering it.
+            // See: W-14037619 for details
+            assert.isTrue(
+                vm.state === VMState.connected || vm.state === VMState.disconnected,
+                `${vm} must have been connected.`
+            );
+        }
     }
     resetComponentStateWhenRemoved(vm);
 }
 
-function getNearestShadowAncestor(vm: VM): VM | null {
-    let ancestor = vm.owner;
+function getNearestShadowAncestor(owner: VM | null): VM | null {
+    let ancestor = owner;
     while (!isNull(ancestor) && ancestor.renderMode === RenderMode.Light) {
         ancestor = ancestor.owner;
     }
@@ -289,6 +338,7 @@ export function createVM<HostNode, HostElement>(
 ): VM {
     const { mode, owner, tagName, hydrated } = options;
     const def = getComponentInternalDef(ctor);
+    const apiVersion = getComponentAPIVersion(ctor);
 
     const vm: VM = {
         elm,
@@ -315,6 +365,9 @@ export function createVM<HostNode, HostElement>(
             stylesheetToken: undefined,
             hasTokenInClass: undefined,
             hasTokenInAttribute: undefined,
+            legacyStylesheetToken: undefined,
+            hasLegacyTokenInClass: undefined,
+            hasLegacyTokenInAttribute: undefined,
             hasScopedStyles: undefined,
             styleVNodes: null,
             tplCache: EmptyObject,
@@ -325,6 +378,7 @@ export function createVM<HostNode, HostElement>(
         // Properties set right after VM creation.
         tro: null!,
         shadowMode: null!,
+        shadowMigrateMode: false,
         stylesheets: null!,
 
         // Properties set by the LightningElement constructor.
@@ -337,6 +391,7 @@ export function createVM<HostNode, HostElement>(
         getHook,
 
         renderer,
+        apiVersion,
     };
 
     if (process.env.NODE_ENV !== 'production') {
@@ -344,16 +399,27 @@ export function createVM<HostNode, HostElement>(
     }
 
     vm.stylesheets = computeStylesheets(vm, def.ctor);
-    vm.shadowMode = computeShadowMode(vm, renderer);
+    const computedShadowMode = computeShadowMode(def, vm.owner, renderer, hydrated);
+    if (lwcRuntimeFlags.ENABLE_FORCE_SHADOW_MIGRATE_MODE) {
+        vm.shadowMode = ShadowMode.Native;
+        vm.shadowMigrateMode = computedShadowMode === ShadowMode.Synthetic;
+    } else {
+        vm.shadowMode = computedShadowMode;
+    }
     vm.tro = getTemplateReactiveObserver(vm);
+
+    // We don't need to report the shadow mode if we're rendering in light DOM
+    if (isReportingEnabled() && vm.renderMode === RenderMode.Shadow) {
+        report(ReportingEventId.ShadowModeUsage, {
+            tagName: vm.tagName,
+            mode: vm.shadowMode,
+        });
+    }
 
     if (process.env.NODE_ENV !== 'production') {
         vm.toString = (): string => {
             return `[object:vm ${def.name} (${vm.idx})]`;
         };
-        if (lwcRuntimeFlags.ENABLE_FORCE_NATIVE_SHADOW_MODE_FOR_TEST) {
-            vm.shadowMode = ShadowMode.Native;
-        }
     }
 
     // Create component instance associated to the vm and the element.
@@ -373,7 +439,7 @@ function validateComponentStylesheets(vm: VM, stylesheets: TemplateStylesheetFac
     const validate = (arrayOrStylesheet: TemplateStylesheetFactories | StylesheetFactory) => {
         if (isArray(arrayOrStylesheet)) {
             for (let i = 0; i < arrayOrStylesheet.length; i++) {
-                validate((arrayOrStylesheet as TemplateStylesheetFactories)[i]);
+                validate(arrayOrStylesheet[i]);
             }
         } else if (!isFunction(arrayOrStylesheet)) {
             // function assumed to be a stylesheet factory
@@ -429,43 +495,62 @@ function warnOnStylesheetsMutation(ctor: LightningElementConstructor) {
     }
 }
 
-function computeShadowMode(vm: VM, renderer: RendererAPI) {
-    const { def } = vm;
-    const { isSyntheticShadowDefined, isNativeShadowDefined } = renderer;
+// Compute the shadowMode/renderMode without creating a VM. This is used in some scenarios like hydration.
+export function computeShadowAndRenderMode(
+    Ctor: LightningElementConstructor,
+    renderer: RendererAPI
+) {
+    const def = getComponentInternalDef(Ctor);
+    const { renderMode } = def;
+
+    // Assume null `owner` - this is what happens in hydration cases anyway
+    // Also assume we are not in hydration mode for this exported API
+    const shadowMode = computeShadowMode(def, /* owner */ null, renderer, false);
+
+    return { renderMode, shadowMode };
+}
+
+function computeShadowMode(
+    def: ComponentDef,
+    owner: VM | null,
+    renderer: RendererAPI,
+    hydrated: boolean | undefined
+) {
+    // Force the shadow mode to always be native. Used for running tests with synthetic shadow patches
+    // on, but components running in actual native shadow mode
+    if (
+        process.env.NODE_ENV !== 'production' &&
+        lwcRuntimeFlags.ENABLE_FORCE_NATIVE_SHADOW_MODE_FOR_TEST
+    ) {
+        return ShadowMode.Native;
+    }
+
+    if (isTrue(hydrated)) {
+        // hydration only supports native shadow
+        return ShadowMode.Native;
+    }
+
+    const { isSyntheticShadowDefined } = renderer;
 
     let shadowMode;
-    if (isSyntheticShadowDefined) {
+    if (isSyntheticShadowDefined || lwcRuntimeFlags.ENABLE_FORCE_SHADOW_MIGRATE_MODE) {
         if (def.renderMode === RenderMode.Light) {
             // ShadowMode.Native implies "not synthetic shadow" which is consistent with how
             // everything defaults to native when the synthetic shadow polyfill is unavailable.
             shadowMode = ShadowMode.Native;
-        } else if (isNativeShadowDefined) {
-            // Not combined with above condition because @lwc/features only supports identifiers in
-            // the if-condition.
-            if (lwcRuntimeFlags.ENABLE_MIXED_SHADOW_MODE) {
-                if (def.shadowSupportMode === ShadowSupportMode.Any) {
-                    shadowMode = ShadowMode.Native;
-                } else {
-                    const shadowAncestor = getNearestShadowAncestor(vm);
-                    if (
-                        !isNull(shadowAncestor) &&
-                        shadowAncestor.shadowMode === ShadowMode.Native
-                    ) {
-                        // Transitive support for native Shadow DOM. A component in native mode
-                        // transitively opts all of its descendants into native.
-                        shadowMode = ShadowMode.Native;
-                    } else {
-                        // Synthetic if neither this component nor any of its ancestors are configured
-                        // to be native.
-                        shadowMode = ShadowMode.Synthetic;
-                    }
-                }
+        } else if (def.shadowSupportMode === ShadowSupportMode.Native) {
+            shadowMode = ShadowMode.Native;
+        } else {
+            const shadowAncestor = getNearestShadowAncestor(owner);
+            if (!isNull(shadowAncestor) && shadowAncestor.shadowMode === ShadowMode.Native) {
+                // Transitive support for native Shadow DOM. A component in native mode
+                // transitively opts all of its descendants into native.
+                shadowMode = ShadowMode.Native;
             } else {
+                // Synthetic if neither this component nor any of its ancestors are configured
+                // to be native.
                 shadowMode = ShadowMode.Synthetic;
             }
-        } else {
-            // Synthetic if there is no native Shadow DOM support.
-            shadowMode = ShadowMode.Synthetic;
         }
     } else {
         // Native if the synthetic shadow polyfill is unavailable.
@@ -475,8 +560,8 @@ function computeShadowMode(vm: VM, renderer: RendererAPI) {
     return shadowMode;
 }
 
-function assertIsVM(obj: any): asserts obj is VM {
-    if (isNull(obj) || !isObject(obj) || !('renderRoot' in obj)) {
+function assertIsVM(obj: unknown): asserts obj is VM {
+    if (!isObject(obj) || isNull(obj) || !('renderRoot' in obj)) {
         throw new TypeError(`${obj} is not a VM.`);
     }
 }
@@ -516,6 +601,9 @@ function rehydrate(vm: VM) {
 
 function patchShadowRoot(vm: VM, newCh: VNodes) {
     const { renderRoot, children: oldCh, renderer } = vm;
+
+    // reset the refs; they will be set during `patchChildren`
+    resetRefVNodes(vm);
 
     // caching the new children collection
     vm.children = newCh;
@@ -561,11 +649,6 @@ export function runRenderedCallback(vm: VM) {
         return;
     }
 
-    const { rendered } = Services;
-    if (rendered) {
-        invokeServiceHook(vm, rendered);
-    }
-
     if (!isUndefined(renderedCallback)) {
         logOperationStart(OperationId.RenderedCallback, vm);
         invokeComponentCallback(vm, renderedCallback);
@@ -603,7 +686,7 @@ function flushRehydrationQueue() {
 
             // re-throwing the original error will break the current tick, but since the next tick is
             // already scheduled, it should continue patching the rest.
-            throw error; // eslint-disable-line no-unsafe-finally
+            throw error;
         }
     }
 
@@ -616,11 +699,6 @@ export function runConnectedCallback(vm: VM) {
         return; // nothing to do since it was already connected
     }
     vm.state = VMState.connected;
-    // reporting connection
-    const { connected } = Services;
-    if (connected) {
-        invokeServiceHook(vm, connected);
-    }
     if (hasWireAdapters(vm)) {
         connectWireAdapters(vm);
     }
@@ -631,6 +709,28 @@ export function runConnectedCallback(vm: VM) {
         invokeComponentCallback(vm, connectedCallback);
 
         logOperationEnd(OperationId.ConnectedCallback, vm);
+    }
+    // This test only makes sense in the browser, with synthetic lifecycle, and when reporting is enabled or
+    // we're in dev mode. This is to detect a particular issue with synthetic lifecycle.
+    if (
+        process.env.IS_BROWSER &&
+        !shouldUseNativeCustomElementLifecycle(vm.component.constructor) &&
+        (process.env.NODE_ENV !== 'production' || isReportingEnabled())
+    ) {
+        if (!vm.renderer.isConnected(vm.elm)) {
+            if (process.env.NODE_ENV !== 'production') {
+                logWarnOnce(
+                    `Element <${vm.tagName}> ` +
+                        `fired a \`connectedCallback\` and rendered, but was not connected to the DOM. ` +
+                        `Please ensure all components are actually connected to the DOM, e.g. using ` +
+                        `\`document.body.appendChild(element)\`. This will not be supported in future versions of ` +
+                        `LWC and could cause component errors. For details, see: https://sfdc.co/synthetic-lifecycle`
+                );
+            }
+            report(ReportingEventId.ConnectedCallbackWhileDisconnected, {
+                tagName: vm.tagName,
+            });
+        }
     }
 }
 
@@ -650,11 +750,6 @@ function runDisconnectedCallback(vm: VM) {
         vm.isDirty = true;
     }
     vm.state = VMState.disconnected;
-    // reporting disconnection
-    const { disconnected } = Services;
-    if (disconnected) {
-        invokeServiceHook(vm, disconnected);
-    }
     if (hasWireAdapters(vm)) {
         disconnectWireAdapters(vm);
     }
@@ -707,6 +802,7 @@ function runLightChildNodesDisconnectedCallback(vm: VM) {
  * need to continue into its children because by attempting to disconnect the
  * custom element itself will trigger the removal of anything slotted or anything
  * defined on its shadow.
+ * @param vnodes
  */
 function recursivelyDisconnectChildren(vnodes: VNodes) {
     for (let i = 0, len = vnodes.length; i < len; i += 1) {
@@ -809,7 +905,12 @@ export function runWithBoundaryProtection(
             addErrorComponentStack(vm, error);
 
             const errorBoundaryVm = isNull(owner) ? undefined : getErrorBoundaryVM(owner);
-            if (isUndefined(errorBoundaryVm)) {
+            // Error boundaries are not in effect when server-side rendering. `errorCallback`
+            // is intended to allow recovery from errors - changing the state of a component
+            // and instigating a re-render. That is at odds with the single-pass, synchronous
+            // nature of SSR. For that reason, all errors bubble up to the `renderComponent`
+            // call site.
+            if (!process.env.IS_BROWSER || isUndefined(errorBoundaryVm)) {
                 throw error; // eslint-disable-line no-unsafe-finally
             }
             resetComponentRoot(vm); // remove offenders
@@ -840,4 +941,57 @@ export function forceRehydration(vm: VM) {
         markComponentAsDirty(vm);
         scheduleRehydration(vm);
     }
+}
+
+export function runFormAssociatedCustomElementCallback(vm: VM, faceCb: () => void) {
+    const { renderMode, shadowMode } = vm;
+
+    if (shadowMode === ShadowMode.Synthetic && renderMode !== RenderMode.Light) {
+        throw new Error(
+            'Form associated lifecycle methods are not available in synthetic shadow. Please use native shadow or light DOM.'
+        );
+    }
+
+    invokeComponentCallback(vm, faceCb);
+}
+
+export function runFormAssociatedCallback(elm: HTMLElement) {
+    const vm = getAssociatedVM(elm);
+    const { formAssociatedCallback } = vm.def;
+
+    if (!isUndefined(formAssociatedCallback)) {
+        runFormAssociatedCustomElementCallback(vm, formAssociatedCallback);
+    }
+}
+
+export function runFormDisabledCallback(elm: HTMLElement) {
+    const vm = getAssociatedVM(elm);
+    const { formDisabledCallback } = vm.def;
+
+    if (!isUndefined(formDisabledCallback)) {
+        runFormAssociatedCustomElementCallback(vm, formDisabledCallback);
+    }
+}
+
+export function runFormResetCallback(elm: HTMLElement) {
+    const vm = getAssociatedVM(elm);
+    const { formResetCallback } = vm.def;
+
+    if (!isUndefined(formResetCallback)) {
+        runFormAssociatedCustomElementCallback(vm, formResetCallback);
+    }
+}
+
+export function runFormStateRestoreCallback(elm: HTMLElement) {
+    const vm = getAssociatedVM(elm);
+    const { formStateRestoreCallback } = vm.def;
+
+    if (!isUndefined(formStateRestoreCallback)) {
+        runFormAssociatedCustomElementCallback(vm, formStateRestoreCallback);
+    }
+}
+
+export function resetRefVNodes(vm: VM) {
+    const { cmpTemplate } = vm;
+    vm.refVNodes = !isNull(cmpTemplate) && cmpTemplate.hasRefs ? create(null) : null;
 }

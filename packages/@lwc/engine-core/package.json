@@ -4,7 +4,7 @@
         "You can safely modify dependencies, devDependencies, keywords, etc., but other props will be overwritten."
     ],
     "name": "@lwc/engine-core",
-    "version": "3.0.1",
+    "version": "6.3.2",
     "description": "Core LWC engine APIs.",
     "keywords": [
         "lwc"
@@ -36,17 +36,17 @@
         "targets": {
             "build": {
                 "outputs": [
-                    "./dist"
+                    "{projectRoot}/dist"
                 ]
             }
         }
     },
     "dependencies": {
-        "@lwc/aria-reflection": "3.0.1",
-        "@lwc/features": "3.0.1",
-        "@lwc/shared": "3.0.1"
+        "@lwc/features": "6.3.2",
+        "@lwc/shared": "6.3.2"
     },
     "devDependencies": {
-        "observable-membrane": "2.0.0"
+        "observable-membrane": "2.0.0",
+        "@lwc/signals": "6.3.2"
     }
 }

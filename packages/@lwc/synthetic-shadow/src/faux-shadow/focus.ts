@@ -118,7 +118,7 @@ export function hostElementFocus(this: HTMLElement) {
         // observable differences for component authors between synthetic and native.
         const focusable = querySelector.call(this, FocusableSelector) as HTMLElement;
         if (!isNull(focusable)) {
-            // @ts-ignore type-mismatch
+            // @ts-expect-error type-mismatch
             focusable.focus.apply(focusable, arguments);
         }
         return;
@@ -139,7 +139,7 @@ export function hostElementFocus(this: HTMLElement) {
     let didFocus = false;
     while (!didFocus && focusables.length !== 0) {
         const focusable = focusables.shift()!;
-        // @ts-ignore type-mismatch
+        // @ts-expect-error type-mismatch
         focusable.focus.apply(focusable, arguments);
         // Get the root node of the current focusable in case it was slotted.
         const currentRootNode = focusable.getRootNode() as unknown as DocumentOrShadowRoot;
@@ -215,7 +215,7 @@ function muteEvent(event: Event) {
     event.preventDefault();
     event.stopPropagation();
 }
-function muteFocusEventsDuringExecution(win: Window, func: Function) {
+function muteFocusEventsDuringExecution(win: Window, func: (...args: any[]) => any) {
     windowAddEventListener.call(win, 'focusin', muteEvent, true);
     windowAddEventListener.call(win, 'focusout', muteEvent, true);
     func();
@@ -348,7 +348,7 @@ function isTabbableFrom(fromRoot: Node, toElm: HTMLElement): boolean {
     let root = toElm.getRootNode();
     while (root !== ownerDocument && root !== fromRoot) {
         const sr = root as ShadowRoot;
-        const host = sr.host!;
+        const host = sr.host;
         if (getAttribute.call(host, 'tabindex') === '-1') {
             return false;
         }

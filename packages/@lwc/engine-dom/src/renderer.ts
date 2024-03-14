@@ -1,21 +1,17 @@
 /*
- * Copyright (c) 2018, salesforce.com, inc.
+ * Copyright (c) 2023, Salesforce.com, inc.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
  */
 
-import {
-    globalThis,
-    assign,
-    hasOwnProperty,
-    KEY__IS_NATIVE_SHADOW_ROOT_DEFINED,
-    KEY__SHADOW_TOKEN,
-} from '@lwc/shared';
+import { assign, hasOwnProperty, KEY__SHADOW_TOKEN } from '@lwc/shared';
 import { insertStylesheet } from './styles';
-import { createCustomElement } from './custom-elements/create-custom-element';
+import {
+    createCustomElement,
+    getUpgradableConstructor,
+} from './custom-elements/create-custom-element';
 import { rendererFactory } from './renderer-factory';
-
 import type { RendererAPI } from '@lwc/engine-core';
 
 /**
@@ -32,7 +28,7 @@ export const renderer: RendererAPI = assign(
         insertStylesheet,
         // relies on a shared global cache
         createCustomElement,
-        isNativeShadowDefined: globalThis[KEY__IS_NATIVE_SHADOW_ROOT_DEFINED],
+        defineCustomElement: getUpgradableConstructor,
         isSyntheticShadowDefined: hasOwnProperty.call(Element.prototype, KEY__SHADOW_TOKEN),
     }
 );

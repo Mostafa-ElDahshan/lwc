@@ -5,11 +5,13 @@
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
  */
 import {
+    APIFeature,
     ArrayPush,
     assert,
     create as ObjectCreate,
-    freeze as ObjectFreeze,
     forEach,
+    freeze as ObjectFreeze,
+    isAPIFeatureEnabled,
     isArray,
     isFalse,
     isFunction,
@@ -27,26 +29,29 @@ import { logError } from '../shared/logger';
 
 import { invokeEventListener } from './invoker';
 import { getVMBeingRendered, setVMBeingRendered } from './template';
-import { EmptyArray, setRefVNode } from './utils';
+import { applyTemporaryCompilerV5SlotFix, EmptyArray } from './utils';
 import { isComponentConstructor } from './def';
-import { ShadowMode, SlotSet, VM, RenderMode } from './vm';
+import { RenderMode, ShadowMode, SlotSet, VM } from './vm';
 import { LightningElementConstructor } from './base-lightning-element';
 import { markAsDynamicChildren } from './rendering';
 import {
+    isVScopedSlotFragment,
+    Key,
+    VComment,
+    VCustomElement,
+    VElement,
+    VElementData,
+    VFragment,
     VNode,
     VNodes,
-    VElement,
-    VText,
-    VCustomElement,
-    VComment,
-    VElementData,
     VNodeType,
-    VStatic,
-    Key,
-    VFragment,
-    isVScopedSlotFragment,
     VScopedSlotFragment,
-    VStaticElementData,
+    VStatic,
+    VText,
+    VStaticPart,
+    VStaticPartData,
+    isVBaseElement,
+    isVStatic,
 } from './vnodes';
 import { getComponentRegisteredName } from './component';
 
@@ -54,6 +59,15 @@ const SymbolIterator: typeof Symbol.iterator = Symbol.iterator;
 
 function addVNodeToChildLWC(vnode: VCustomElement) {
     ArrayPush.call(getVMBeingRendered()!.velements, vnode);
+}
+
+// [s]tatic [p]art
+function sp(partId: number, data: VStaticPartData): VStaticPart {
+    return {
+        partId,
+        data,
+        elm: undefined, // elm is defined later
+    };
 }
 
 // [s]coped [s]lot [f]actory
@@ -70,7 +84,7 @@ function ssf(slotName: unknown, factory: (value: any, key: any) => VFragment): V
 }
 
 // [st]atic node
-function st(fragment: Element, key: Key, data?: VStaticElementData): VStatic {
+function st(fragment: Element, key: Key, parts?: VStaticPart[]): VStatic {
     const owner = getVMBeingRendered()!;
     const vnode: VStatic = {
         type: VNodeType.Static,
@@ -79,22 +93,24 @@ function st(fragment: Element, key: Key, data?: VStaticElementData): VStatic {
         elm: undefined,
         fragment,
         owner,
-        data,
+        parts,
+        slotAssignment: undefined,
     };
-
-    const ref = data?.ref;
-
-    if (!isUndefined(ref)) {
-        setRefVNode(owner, ref, vnode);
-    }
 
     return vnode;
 }
 
 // [fr]agment node
 function fr(key: Key, children: VNodes, stable: 0 | 1): VFragment {
-    const leading = t('');
-    const trailing = t('');
+    const owner = getVMBeingRendered()!;
+    const useCommentNodes = isAPIFeatureEnabled(
+        APIFeature.USE_COMMENTS_FOR_FRAGMENT_BOOKENDS,
+        owner.apiVersion
+    );
+
+    const leading = useCommentNodes ? co('') : t('');
+    const trailing = useCommentNodes ? co('') : t('');
+
     return {
         type: VNodeType.Fragment,
         sel: undefined,
@@ -102,7 +118,7 @@ function fr(key: Key, children: VNodes, stable: 0 | 1): VFragment {
         elm: undefined,
         children: [leading, ...children, trailing],
         stable,
-        owner: getVMBeingRendered()!,
+        owner,
         leading,
         trailing,
     };
@@ -147,7 +163,10 @@ function h(sel: string, data: VElementData, children: VNodes = EmptyArray): VEle
         });
     }
 
-    const { key, ref } = data;
+    // TODO [#3974]: remove temporary logic to support v5 compiler + v6+ engine
+    data = applyTemporaryCompilerV5SlotFix(data);
+
+    const { key, slotAssignment } = data;
 
     const vnode: VElement = {
         type: VNodeType.Element,
@@ -157,11 +176,8 @@ function h(sel: string, data: VElementData, children: VNodes = EmptyArray): VEle
         elm: undefined,
         key,
         owner: vmBeingRendered,
+        slotAssignment,
     };
-
-    if (!isUndefined(ref)) {
-        setRefVNode(vmBeingRendered, ref, vnode);
-    }
 
     return vnode;
 }
@@ -192,12 +208,19 @@ function s(
     data: VElementData,
     children: VNodes,
     slotset: SlotSet | undefined
-): VElement | VNodes {
+): VElement | VNodes | VFragment {
     if (process.env.NODE_ENV !== 'production') {
         assert.isTrue(isString(slotName), `s() 1st argument slotName must be a string.`);
         assert.isTrue(isObject(data), `s() 2nd argument data must be an object.`);
         assert.isTrue(isArray(children), `h() 3rd argument children must be an array.`);
     }
+
+    const vmBeingRendered = getVMBeingRendered()!;
+    const { renderMode, apiVersion } = vmBeingRendered;
+
+    // TODO [#3974]: remove temporary logic to support v5 compiler + v6+ engine
+    data = applyTemporaryCompilerV5SlotFix(data);
+
     if (
         !isUndefined(slotset) &&
         !isUndefined(slotset.slotAssignments) &&
@@ -227,7 +250,6 @@ function s(
                 }
                 // If the passed slot content is factory, evaluate it and add the produced vnodes
                 if (assignedNodeIsScopedSlot) {
-                    const vmBeingRenderedInception = getVMBeingRendered();
                     // Evaluate in the scope of the slot content's owner
                     // if a slotset is provided, there will always be an owner. The only case where owner is
                     // undefined is for root components, but root components cannot accept slotted content
@@ -240,23 +262,43 @@ function s(
                             ArrayPush.call(newChildren, vnode.factory(data.slotData, data.key));
                         });
                     } finally {
-                        setVMBeingRendered(vmBeingRenderedInception);
+                        setVMBeingRendered(vmBeingRendered);
                     }
                 } else {
+                    // This block is for standard slots (non-scoped slots)
+                    let clonedVNode;
+                    if (
+                        renderMode === RenderMode.Light &&
+                        isAPIFeatureEnabled(APIFeature.USE_LIGHT_DOM_SLOT_FORWARDING, apiVersion) &&
+                        (isVBaseElement(vnode) || isVStatic(vnode)) &&
+                        // We only need to copy the vnodes when the slot assignment changes, copying every time causes issues with
+                        // disconnected/connected callback firing.
+                        vnode.slotAssignment !== data.slotAssignment
+                    ) {
+                        // When the light DOM slot assignment (slot attribute) changes we can't use the same reference
+                        // to the vnode because the current way the diffing algo works, it will replace the original reference
+                        // to the host element with a new one. This means the new element will be mounted and immediately unmounted.
+                        // Creating a copy of the vnode to preserve a reference to the previous host element.
+                        clonedVNode = { ...vnode, slotAssignment: data.slotAssignment };
+                    }
                     // If the slot content is standard type, the content is static, no additional
                     // processing needed on the vnode
-                    ArrayPush.call(newChildren, vnode);
+                    ArrayPush.call(newChildren, clonedVNode ?? vnode);
                 }
             }
         }
         children = newChildren;
     }
-    const vmBeingRendered = getVMBeingRendered()!;
-    const { renderMode, shadowMode } = vmBeingRendered;
+    const { shadowMode } = vmBeingRendered;
 
     if (renderMode === RenderMode.Light) {
-        sc(children);
-        return children;
+        // light DOM slots - backwards-compatible behavior uses flattening, new behavior uses fragments
+        if (isAPIFeatureEnabled(APIFeature.USE_FRAGMENTS_FOR_LIGHT_DOM_SLOTS, apiVersion)) {
+            return fr(data.key, children, 0);
+        } else {
+            sc(children);
+            return children;
+        }
     }
     if (shadowMode === ShadowMode.Synthetic) {
         // TODO [#1276]: compiler should give us some sort of indicator when a vnodes collection is dynamic
@@ -310,7 +352,11 @@ function c(
             });
         }
     }
-    const { key, ref } = data;
+
+    // TODO [#3974]: remove temporary logic to support v5 compiler + v6+ engine
+    data = applyTemporaryCompilerV5SlotFix(data);
+
+    const { key, slotAssignment } = data;
     let elm, aChildren, vm;
     const vnode: VCustomElement = {
         type: VNodeType.CustomElement,
@@ -319,6 +365,7 @@ function c(
         children,
         elm,
         key,
+        slotAssignment,
 
         ctor: Ctor,
         owner: vmBeingRendered,
@@ -327,10 +374,6 @@ function c(
         vm,
     };
     addVNodeToChildLWC(vnode);
-
-    if (!isUndefined(ref)) {
-        setRefVNode(vmBeingRendered, ref, vnode);
-    }
 
     return vnode;
 }
@@ -426,6 +469,7 @@ function i(
 
 /**
  * [f]lattening
+ * @param items
  */
 function f(items: Readonly<Array<Readonly<Array<VNodes>> | VNodes>>): VNodes {
     if (process.env.NODE_ENV !== 'production') {
@@ -557,6 +601,10 @@ function fid(url: string | undefined | null): string | null | undefined {
  * [ddc] - create a (deprecated) dynamic component via `<x-foo lwc:dynamic={Ctor}>`
  *
  * TODO [#3331]: remove usage of lwc:dynamic in 246
+ * @param sel
+ * @param Ctor
+ * @param data
+ * @param children
  */
 function ddc(
     sel: string,
@@ -585,6 +633,9 @@ function ddc(
 
 /**
  * [dc] - create a dynamic component via `<lwc:component lwc:is={Ctor}>`
+ * @param Ctor
+ * @param data
+ * @param children
  */
 function dc(
     Ctor: LightningElementConstructor | null | undefined,
@@ -627,13 +678,13 @@ function dc(
  * to the engine that a particular collection of children must be diffed using the slow
  * algo based on keys due to the nature of the list. E.g.:
  *
- *   - slot element's children: the content of the slot has to be dynamic when in synthetic
- *                              shadow mode because the `vnode.children` might be the slotted
- *                              content vs default content, in which case the size and the
- *                              keys are not matching.
- *   - children that contain dynamic components
- *   - children that are produced by iteration
- *
+ * - slot element's children: the content of the slot has to be dynamic when in synthetic
+ * shadow mode because the `vnode.children` might be the slotted
+ * content vs default content, in which case the size and the
+ * keys are not matching.
+ * - children that contain dynamic components
+ * - children that are produced by iteration
+ * @param vnodes
  */
 function sc(vnodes: VNodes): VNodes {
     if (process.env.NODE_ENV !== 'production') {
@@ -661,6 +712,7 @@ export type SanitizeHtmlContentHook = (content: unknown) => string;
 
 /**
  * Sets the sanitizeHtmlContentHook.
+ * @param newHookImpl
  */
 export function setSanitizeHtmlContentHook(newHookImpl: SanitizeHtmlContentHook) {
     sanitizeHtmlContentHook = newHookImpl;
@@ -691,6 +743,7 @@ const api = ObjectFreeze({
     shc,
     ssf,
     ddc,
+    sp,
 });
 
 export default api;

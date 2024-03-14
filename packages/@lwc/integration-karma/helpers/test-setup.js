@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2020, salesforce.com, inc.
+ * Copyright (c) 2023, Salesforce.com, inc.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
@@ -61,6 +61,16 @@ function patchConsole() {
         var originalMethod = console[method];
         // eslint-disable-next-line no-console
         console[method] = function () {
+            // TODO [#3974]: remove temporary logic to support v5 compiler + v6+ engine
+            if (
+                process.env.FORCE_LWC_V5_COMPILER_FOR_TEST &&
+                arguments[0] &&
+                arguments[0].includes('template was compiled with v5')
+            ) {
+                // ignore this warning; this is expected
+                return;
+            }
+
             consoleCallCount++;
             return originalMethod.apply(this, arguments);
         };
@@ -115,3 +125,6 @@ afterAll(function () {
 
     throwIfConsoleCalled();
 });
+
+// The default of 5000ms seems to get surpassed frequently in Safari 14 in SauceLabs
+jasmine.DEFAULT_TIMEOUT_INTERVAL = 60000;

@@ -21,25 +21,26 @@ export interface Config {
     customRendererConfig?: CustomRendererConfig;
 
     /**
-     * Enable computed member expression in the template. eg:
-     *    <template>
-     *        {list[0].name}
-     *    </template>
+     * Enable computed member expression in the template.
+     * @example
+     * <template>
+     *     {list[0].name}
+     * </template>
      */
     experimentalComputedMemberExpression?: boolean;
 
     // TODO [#3370]: remove experimental template expression flag
     /**
      * Enable use of (a subset of) JavaScript expressions in place of template bindings.
-     *
-     *    <template>
-     *        <input
-     *            attr={complex ?? expressions()}
-     *            onchange={({ target }) => componentMethod(target.value)}
-     *        >
-     *            Hey there {inAustralia ? 'mate' : 'friend'}
-     *        </input>
-     *    </template>
+     * @example
+     * <template>
+     *     <input
+     *         attr={complex ?? expressions()}
+     *         onchange={({ target }) => componentMethod(target.value)}
+     *     >
+     *         Hey there {inAustralia ? 'mate' : 'friend'}
+     *     </input>
+     * </template>
      */
     experimentalComplexExpressions?: boolean;
 
@@ -166,8 +167,8 @@ export function normalizeConfig(config: Config): NormalizedConfig {
         enableDynamicComponents: false,
         enableStaticContentOptimization: true,
         enableLwcSpread: true,
-        apiVersion,
         ...config,
+        apiVersion, // overrides the config apiVersion
         ...{ customRendererConfig },
         ...{ instrumentation },
     };

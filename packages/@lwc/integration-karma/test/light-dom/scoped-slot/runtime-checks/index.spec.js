@@ -1,7 +1,10 @@
 import { createElement } from 'lwc';
+import { USE_COMMENTS_FOR_FRAGMENT_BOOKENDS } from 'test-utils';
 
 import ParentWithScopedSlotContent from 'x/parentWithScopedSlotContent';
 import ParentWithStandardSlotContent from 'x/parentWithStandardSlotContent';
+
+const vFragBookend = USE_COMMENTS_FOR_FRAGMENT_BOOKENDS ? '<!---->' : '';
 
 describe('runtime validation of slot content and slot', () => {
     it('Ignores content when parent uses scoped slot and child has standard slot', () => {
@@ -12,7 +15,7 @@ describe('runtime validation of slot content and slot', () => {
         }).toLogErrorDev(/Mismatched slot types for \(default\) slot./gm);
         const child = elm.shadowRoot.querySelector('x-child-with-standard-slots');
         // The child's default content for that <slot> is ignored too
-        expect(child.innerHTML).toBe('');
+        expect(child.innerHTML).toBe(`${vFragBookend}${vFragBookend}`);
     });
 
     it('Ignores content when parent uses standard slot and child has scoped slot', () => {
@@ -22,7 +25,7 @@ describe('runtime validation of slot content and slot', () => {
         }).toLogErrorDev(/Mismatched slot types for \(default\) slot./gm);
         const child = elm.shadowRoot.querySelector('x-child-with-scoped-slots');
         // The child's default content for that <slot> is ignored too
-        expect(child.innerHTML).toBe('');
+        expect(child.innerHTML).toBe(`${vFragBookend}${vFragBookend}`);
     });
 
     it('Ignores content when parent uses scoped slot on child using shadow dom', () => {

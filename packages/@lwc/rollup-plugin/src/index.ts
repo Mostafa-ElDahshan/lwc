@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2018, salesforce.com, inc.
+ * Copyright (c) 2024, Salesforce, Inc.
  * All rights reserved.
  * SPDX-License-Identifier: MIT
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
@@ -8,7 +8,7 @@ import fs from 'fs';
 import path from 'path';
 import { URLSearchParams } from 'url';
 
-import { Plugin, SourceMapInput, RollupWarning } from 'rollup';
+import { Plugin, SourceMapInput, RollupLog } from 'rollup';
 import pluginUtils, { FilterPattern } from '@rollup/pluginutils';
 import { transformSync, StylesheetConfig, DynamicImportConfig } from '@lwc/compiler';
 import { resolveModule, ModuleRecord, RegistryType } from '@lwc/module-resolver';
@@ -22,8 +22,8 @@ export interface RollupLwcOptions {
     exclude?: FilterPattern;
     /** The LWC root module directory. */
     rootDir?: string;
-    /** If `true` the plugin will produce source maps. */
-    sourcemap?: boolean;
+    /** If `true` the plugin will produce source maps. If `'inline'`, the plugin will produce inlined source maps and append them to the end of the generated file. */
+    sourcemap?: boolean | 'inline';
     /** The [module resolution](https://lwc.dev/guide/es_modules#module-resolution) overrides passed to the `@lwc/module-resolver`. */
     modules?: ModuleRecord[];
     /** The stylesheet compiler configuration to pass to the `@lwc/style-compiler` */
@@ -47,6 +47,8 @@ export interface RollupLwcOptions {
     disableSyntheticShadowSupport?: boolean;
     /** The API version to associate with the compiled module */
     apiVersion?: APIVersion;
+    /** True if the static content optimization should be enabled. Defaults to true */
+    enableStaticContentOptimization?: boolean;
 }
 
 const PLUGIN_NAME = 'rollup-plugin-lwc-compiler';
@@ -105,15 +107,15 @@ function appendAliasSpecifierQueryParam(id: string, specifier: string): string {
     return `${filename}?${params.toString()}`;
 }
 
-function transformWarningToRollupWarning(
+function transformWarningToRollupLog(
     warning: CompilerDiagnostic,
     src: string,
     id: string
-): RollupWarning {
-    // For reference on RollupWarnings, a good example is:
+): RollupLog {
+    // For reference on RollupLogs (f.k.a. RollupWarnings), a good example is:
     // https://github.com/rollup/plugins/blob/53776ee/packages/typescript/src/diagnostics/toWarning.ts
     const pluginCode = `LWC${warning.code}`; // modeled after TypeScript, e.g. TS5055
-    const result: RollupWarning = {
+    const result: RollupLog = {
         // Replace any newlines in case they exist, just so the Rollup output looks a bit cleaner
         message: `@lwc/rollup-plugin: ${warning.message?.replace(/\n/g, ' ')}`,
         plugin: PLUGIN_NAME,
@@ -142,6 +144,11 @@ function transformWarningToRollupWarning(
     return result;
 }
 
+/**
+ * Rollup plugin for bundling LWC components
+ * @param pluginOptions LWC rollup plugin options
+ * @returns LWC rollup plugin
+ */
 export default function lwc(pluginOptions: RollupLwcOptions = {}): Plugin {
     const filter = pluginUtils.createFilter(pluginOptions.include, pluginOptions.exclude);
 
@@ -325,11 +332,15 @@ export default function lwc(pluginOptions: RollupLwcOptions = {}): Plugin {
                 scopedStyles: scoped,
                 disableSyntheticShadowSupport,
                 apiVersion: apiVersionToUse,
+                // Only pass this in if it's actually specified – otherwise unspecified becomes undefined becomes false
+                ...('enableStaticContentOptimization' in pluginOptions && {
+                    enableStaticContentOptimization: pluginOptions.enableStaticContentOptimization,
+                }),
             });
 
             if (warnings) {
                 for (const warning of warnings) {
-                    this.warn(transformWarningToRollupWarning(warning, src, filename));
+                    this.warn(transformWarningToRollupLog(warning, src, filename));
                 }
             }
 

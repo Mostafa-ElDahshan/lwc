@@ -1,4 +1,5 @@
-import { createElement, setFeatureFlagForTest } from 'lwc';
+import { createElement } from 'lwc';
+import { extractDataIds, LOWERCASE_SCOPE_TOKENS } from 'test-utils';
 import Container from 'x/container';
 import Escape from 'x/escape';
 import MultipleStyles from 'x/multipleStyles';
@@ -11,17 +12,13 @@ import StaticUnsafeTopLevel from 'x/staticUnsafeTopLevel';
 import OnlyEventListener from 'x/onlyEventListener';
 import OnlyEventListenerChild from 'x/onlyEventListenerChild';
 import OnlyEventListenerGrandchild from 'x/onlyEventListenerGrandchild';
+import ListenerStaticWithUpdates from 'x/listenerStaticWithUpdates';
+import DeepListener from 'x/deepListener';
+import Comments from 'x/comments';
+import PreserveComments from 'x/preserveComments';
 
-// In compat mode, the component will always render in synthetic mode with the scope attribute
-if (!process.env.NATIVE_SHADOW && !process.env.COMPAT) {
+if (!process.env.NATIVE_SHADOW) {
     describe('Mixed mode for static content', () => {
-        beforeEach(() => {
-            setFeatureFlagForTest('ENABLE_MIXED_SHADOW_MODE', true);
-        });
-        afterEach(() => {
-            setFeatureFlagForTest('ENABLE_MIXED_SHADOW_MODE', false);
-        });
-
         ['native', 'synthetic'].forEach((firstRenderMode) => {
             it(`should set the tokens for synthetic shadow when it renders first in ${firstRenderMode}`, () => {
                 const elm = createElement('x-container', { is: Container });
@@ -36,8 +33,7 @@ if (!process.env.NATIVE_SHADOW && !process.env.COMPAT) {
                     .shadowRoot.querySelector('x-component')
                     .shadowRoot.querySelector('div');
 
-                const token =
-                    process.env.API_VERSION <= 58 ? 'x-component_component' : 'lwc-6a8uqob2ku4';
+                const token = LOWERCASE_SCOPE_TOKENS ? 'lwc-6a8uqob2ku4' : 'x-component_component';
                 expect(syntheticMode.hasAttribute(token)).toBe(true);
                 expect(nativeMode.hasAttribute(token)).toBe(false);
             });
@@ -80,7 +76,7 @@ describe('static content when stylesheets change', () => {
                 const classList = Array.from(elm.shadowRoot.querySelector('div').classList).sort();
                 expect(classList).toEqual([
                     'foo',
-                    process.env.API_VERSION <= 58 ? 'x-multipleStyles_b' : 'lwc-6fpm08fjoch',
+                    LOWERCASE_SCOPE_TOKENS ? 'lwc-6fpm08fjoch' : 'x-multipleStyles_b',
                 ]);
 
                 expect(() => {
@@ -343,5 +339,96 @@ describe('static optimization with event listeners', () => {
                 expect(dispatcher.calls.count()).toBe(2);
             });
         });
+    });
+});
+
+describe('event listeners on static nodes when other nodes are updated', () => {
+    it('event listeners work after updates', async () => {
+        const elm = createElement('x-listener-static-with-updates', {
+            is: ListenerStaticWithUpdates,
+        });
+        document.body.appendChild(elm);
+
+        await Promise.resolve();
+
+        let expectedCount = 0;
+
+        expect(elm.fooEventCount).toBe(expectedCount);
+        elm.fireFooEvent();
+        expect(elm.fooEventCount).toBe(++expectedCount);
+
+        await Promise.resolve();
+        for (let i = 0; i < 3; i++) {
+            elm.version = i;
+            elm.fireFooEvent();
+            expect(elm.fooEventCount).toBe(++expectedCount);
+            await Promise.resolve();
+            elm.fireFooEvent();
+            expect(elm.fooEventCount).toBe(++expectedCount);
+        }
+    });
+});
+
+describe('event listeners on deep paths', () => {
+    it('handles events correctly', async () => {
+        const elm = createElement('x-deep-listener', {
+            is: DeepListener,
+        });
+        document.body.appendChild(elm);
+
+        await Promise.resolve();
+
+        let count = 0;
+        expect(elm.counter).toBe(count);
+
+        const childElms = Object.values(extractDataIds(elm));
+        expect(childElms.length).toBe(12); // static1, dynamic1, deepStatic1, static2, etc. until 4
+
+        for (const childElm of childElms) {
+            childElm.dispatchEvent(new CustomEvent('foo'));
+            expect(elm.counter).toBe(++count);
+        }
+    });
+});
+
+describe('static parts applies to comments correctly', () => {
+    it('has correct static parts when lwc:preserve-comments is off', async () => {
+        const elm = createElement('x-comments', {
+            is: Comments,
+        });
+        document.body.appendChild(elm);
+
+        await Promise.resolve();
+
+        const { foo, bar } = extractDataIds(elm);
+        const refs = elm.getRefs();
+
+        foo.click();
+        expect(elm.fooWasClicked).toBe(true);
+        expect(refs.foo).toBe(foo);
+
+        bar.click();
+        expect(elm.barWasClicked).toBe(true);
+        expect(refs.bar).toBe(bar);
+    });
+
+    it('has correct static parts when lwc:preserve-comments is on', async () => {
+        const elm = createElement('x-preserve-comments', {
+            is: PreserveComments,
+        });
+        document.body.appendChild(elm);
+
+        await Promise.resolve();
+
+        const { foo, bar } = extractDataIds(elm);
+        const refs = elm.getRefs();
+
+        foo.click();
+        expect(elm.fooWasClicked).toBe(true);
+        expect(refs.foo).toBe(foo);
+
+        bar.click();
+        expect(elm.barWasClicked).toBe(true);
+        expect(refs.bar).toBe(bar);
     });
 });

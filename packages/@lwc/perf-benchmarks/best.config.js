@@ -20,8 +20,7 @@ module.exports = {
     // https://github.com/salesforce/best/commit/6190687cce0559f1ed7678d70763c911a0f96610
     metrics: ['script'],
     plugins: [
-        // Best is currently using an older version of Rollup, so we use an older @rollup/plugin-node-resolve
-        '@lwc/rollup-plugin-node-resolve-legacy',
+        '@rollup/plugin-node-resolve',
         [
             '@rollup/plugin-replace',
             {
@@ -34,7 +33,7 @@ module.exports = {
         ],
     ],
     // This version should be updated when the Best infra updates, once per release
-    specs: { name: 'chrome.headless', version: 108 },
+    specs: { name: 'chrome.headless', version: 'latest' },
     apiDatabase: {
         adapter: 'rest/frontend',
         uri: process.env.BEST_FRONTEND_HOSTNAME,
@@ -44,6 +43,11 @@ module.exports = {
         {
             alias: 'default',
             runner: '@best/runner-headless',
+            config: {
+                launchOptions: {
+                    headless: 'new', // Use Chrome's new headless mode
+                },
+            },
         },
         {
             runner: '@best/runner-remote',
@@ -52,6 +56,9 @@ module.exports = {
                 uri: process.env.BEST_HUB_HOSTNAME,
                 options: {
                     authToken: process.env.BEST_HUB_CLIENT_TOKEN,
+                },
+                launchOptions: {
+                    headless: 'new', // Use Chrome's new headless mode
                 },
             },
         },

@@ -10,6 +10,7 @@ it('should be able to attach an event listener on the host element', () => {
     let args;
 
     const clickHandler = function (...handlerArgs) {
+        // eslint-disable-next-line @typescript-eslint/no-this-alias
         thisValue = this;
         args = handlerArgs;
     };
@@ -50,7 +51,7 @@ describe('event handler is not a function', () => {
 
         expect(() => {
             document.body.appendChild(elm);
-        }).toThrowConnectedError(/Expected an EventListener but received undefined/);
+        }).toThrowCallbackReactionError(/Expected an EventListener but received undefined/);
 
         if (process.env.NODE_ENV === 'production') {
             expect(consoleSpy.calls.error.length).toEqual(0);

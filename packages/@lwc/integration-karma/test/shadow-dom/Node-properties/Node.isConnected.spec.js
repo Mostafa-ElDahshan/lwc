@@ -1,4 +1,5 @@
 import { createElement } from 'lwc';
+import { ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE } from 'test-utils';
 
 import Test from 'x/test';
 
@@ -11,7 +12,16 @@ describe('Node.isConnected', () => {
     it('should return false if the component is in a DocumentFragment until its connected to the document', () => {
         const elm = createElement('x-test', { is: Test });
         const frag = document.createDocumentFragment();
-        frag.appendChild(elm);
+        const doAppend = () => frag.appendChild(elm);
+
+        if (ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE) {
+            doAppend();
+        } else {
+            // Expected warning, since we are working with disconnected nodes
+            expect(doAppend).toLogWarningDev(
+                /fired a `connectedCallback` and rendered, but was not connected to the DOM/
+            );
+        }
 
         expect(elm.shadowRoot.isConnected).toBe(false);
 

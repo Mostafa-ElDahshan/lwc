@@ -25,67 +25,11 @@ function createComment(content: string): Node {
     return document.createComment(content);
 }
 
-let createFragment: (html: string) => Node | null;
-// IE11 lacks support for this feature
-const SUPPORTS_TEMPLATE = typeof HTMLTemplateElement === 'function';
-if (SUPPORTS_TEMPLATE) {
-    // Parse the fragment HTML string into DOM
-    createFragment = function (html: string) {
-        const template = document.createElement('template');
-        template.innerHTML = html;
-        return template.content.firstChild;
-    };
-} else {
-    // In browsers that don't support <template> (e.g. IE11), we need to be careful to wrap elements like
-    // <td> in the proper container elements (e.g. <tbody>), because otherwise they will be parsed as null.
-
-    // Via https://github.com/webcomponents/polyfills/blob/ee1db33/packages/template/template.js#L273-L280
-    // With other elements added from:
-    // https://github.com/sindresorhus/html-tags/blob/95dcdd5/index.js
-    // Using the test:
-    // document.createRange().createContextualFragment(`<${tag}></${tag}>`).firstChild === null
-    // And omitting <html>, <head>, and <body> as these are not practical in an LWC component.
-    const topLevelWrappingMap: { [key: string]: string[] } = {
-        caption: ['table'],
-        col: ['colgroup', 'table'],
-        colgroup: ['table'],
-        option: ['select'],
-        tbody: ['table'],
-        td: ['tr', 'tbody', 'table'],
-        th: ['tr', 'tbody', 'table'],
-        thead: ['table'],
-        tfoot: ['table'],
-        tr: ['tbody', 'table'],
-    };
-
-    // Via https://github.com/webcomponents/polyfills/blob/ee1db33/packages/template/template.js#L282-L288
-    const getTagName = function (text: string) {
-        return (/<([a-z][^/\0>\x20\t\r\n\f]+)/i.exec(text) || ['', ''])[1].toLowerCase();
-    };
-
-    // Via https://github.com/webcomponents/polyfills/blob/ee1db33/packages/template/template.js#L295-L320
-    createFragment = function (html: string) {
-        const wrapperTags = topLevelWrappingMap[getTagName(html)];
-        if (!isUndefined(wrapperTags)) {
-            for (const wrapperTag of wrapperTags) {
-                html = `<${wrapperTag}>${html}</${wrapperTag}>`;
-            }
-        }
-
-        // For IE11, the document title must not be undefined, but it can be an empty string
-        // https://developer.mozilla.org/en-US/docs/Web/API/DOMImplementation/createHTMLDocument#browser_compatibility
-        const doc = document.implementation.createHTMLDocument('');
-        doc.body.innerHTML = html;
-
-        let content: Node = doc.body;
-        if (!isUndefined(wrapperTags)) {
-            for (let i = 0; i < wrapperTags.length; i++) {
-                content = content.firstChild!;
-            }
-        }
-
-        return content.firstChild;
-    };
+// Parse the fragment HTML string into DOM
+function createFragment(html: string): Node | null {
+    const template = document.createElement('template');
+    template.innerHTML = html;
+    return template.content.firstChild;
 }
 
 function insert(node: Node, parent: Node, anchor: Node): void {
@@ -98,6 +42,10 @@ function remove(node: Node, parent: Node): void {
 
 function nextSibling(node: Node): Node | null {
     return node.nextSibling;
+}
+
+function previousSibling(node: Node): Node | null {
+    return node.previousSibling;
 }
 
 function attachShadow(element: Element, options: ShadowRootInit): ShadowRoot {
@@ -245,6 +193,24 @@ function ownerDocument(element: Element): Document {
     return element.ownerDocument;
 }
 
+function getTagName(elm: Element): string {
+    return elm.tagName;
+}
+
+function attachInternals(elm: HTMLElement): ElementInternals {
+    return attachInternalsFunc.call(elm);
+}
+
+// Use the attachInternals method from HTMLElement.prototype because access to it is removed
+// in HTMLBridgeElement, ie: elm.attachInternals is undefined.
+// Additionally, cache the attachInternals method to protect against 3rd party monkey-patching.
+const attachInternalsFunc =
+    typeof ElementInternals !== 'undefined'
+        ? HTMLElement.prototype.attachInternals
+        : () => {
+              throw new Error('attachInternals API is not supported in this browser environment.');
+          };
+
 export { registerContextConsumer, registerContextProvider } from './context';
 
 export {
@@ -256,6 +222,7 @@ export {
     createText,
     createComment,
     nextSibling,
+    previousSibling,
     attachShadow,
     getProperty,
     setProperty,
@@ -279,7 +246,9 @@ export {
     getFirstElementChild,
     getLastChild,
     getLastElementChild,
+    getTagName,
     isConnected,
     assertInstanceOfHTMLElement,
     ownerDocument,
+    attachInternals,
 };

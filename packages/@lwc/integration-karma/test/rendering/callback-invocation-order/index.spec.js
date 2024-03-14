@@ -1,4 +1,5 @@
 import { createElement } from 'lwc';
+import { ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE } from 'test-utils';
 
 import ShadowParent from 'x/shadowParent';
 import ShadowLightParent from 'x/shadowLightParent';
@@ -6,6 +7,8 @@ import LightParent from 'x/lightParent';
 import LightShadowParent from 'x/lightShadowParent';
 import ToggleContainer from 'x/toggleContainer';
 import MultiTemplateConditionals from 'x/multiTemplateConditionals';
+import ShadowContainerMultipleConditionals from 'x/shadowContainerMultipleConditionals';
+import LightContainerMultipleConditionals from 'x/lightContainerMultipleConditionals';
 
 function resetTimingBuffer() {
     window.timingBuffer = [];
@@ -15,16 +18,12 @@ beforeEach(() => {
     resetTimingBuffer();
 });
 
-afterEach(() => {
-    delete window.timingBuffer;
-});
-
 const fixtures = [
     {
         tagName: 'x-shadow-parent',
         ctor: ShadowParent,
         connect: process.env.NATIVE_SHADOW
-            ? window.lwcRuntimeFlags.ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
+            ? ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
                 ? [
                       'shadowParent:connectedCallback',
                       'leaf:before-container:connectedCallback',
@@ -120,7 +119,7 @@ const fixtures = [
         tagName: 'x-light-shadow-parent',
         ctor: LightShadowParent,
         connect: process.env.NATIVE_SHADOW
-            ? window.lwcRuntimeFlags.ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
+            ? ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
                 ? [
                       'lightShadowContainer:connectedCallback',
                       'shadowContainer:connectedCallback',
@@ -172,7 +171,7 @@ it('should invoke callbacks on the right order (issue #1199 and #1198)', () => {
     document.body.appendChild(elm);
     expect(window.timingBuffer).toEqual(
         process.env.NATIVE_SHADOW
-            ? window.lwcRuntimeFlags.ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
+            ? ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
                 ? [
                       'shadowContainer:connectedCallback',
                       'leaf:before-slot:connectedCallback',
@@ -207,7 +206,7 @@ it('should invoke callbacks on the right order (issue #1199 and #1198)', () => {
     elm.hide = true;
     return Promise.resolve().then(() => {
         expect(window.timingBuffer).toEqual(
-            window.lwcRuntimeFlags.ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
+            ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
                 ? [
                       'shadowContainer:disconnectedCallback',
                       'leaf:after-slot:disconnectedCallback',
@@ -253,7 +252,7 @@ it('should invoke callbacks on the right order when multiple templates are used 
             // disconnect x-shadow-parent +
             // connect x-shadow-container with 2 parents, 'a' and 'b'
             expect(window.timingBuffer).toEqual(
-                window.lwcRuntimeFlags.ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
+                ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
                     ? [
                           'leaf:T1-1:disconnectedCallback',
                           'leaf:T1-2:disconnectedCallback',
@@ -296,4 +295,117 @@ it('should invoke callbacks on the right order when multiple templates are used 
                 'leaf:T2-6:disconnectedCallback',
             ]);
         });
+});
+
+describe('regression test (#3827)', () => {
+    let originalOnError;
+    function onError(event) {
+        event.preventDefault(); // don't log the error
+    }
+
+    beforeEach(() => {
+        // These error handlers are here to capture errors thrown in synthetic shadow mode
+        // after the rerendering happens.
+        window.onerror;
+        window.onerror = null;
+        window.addEventListener('error', onError);
+    });
+
+    afterEach(() => {
+        window.onerror = originalOnError;
+        window.removeEventListener('error', onError);
+    });
+
+    const fixtures = [
+        {
+            fixtureName: 'shadow DOM',
+            tagName: 'x-shadow-container-multiple-conditionals',
+            ctor: ShadowContainerMultipleConditionals,
+            elseBlock: (currentLeafName) => [
+                'shadowContainer:connectedCallback',
+                'shadowSlot:connectedCallback',
+                `leaf:${currentLeafName}:connectedCallback`,
+            ],
+            ifBlock: (currentLeafName, previousLeafName) =>
+                process.env.NATIVE_SHADOW
+                    ? []
+                    : ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
+                    ? [
+                          `leaf:${currentLeafName}:connectedCallback`,
+                          `leaf:${previousLeafName}:disconnectedCallback`,
+                      ]
+                    : [`leaf:${currentLeafName}:connectedCallback`],
+            elseIfBlock: (currentLeafName, previousLeafName) =>
+                process.env.NATIVE_SHADOW
+                    ? []
+                    : ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
+                    ? [
+                          `leaf:${currentLeafName}:connectedCallback`,
+                          `leaf:${previousLeafName}:disconnectedCallback`,
+                      ]
+                    : [`leaf:${currentLeafName}:connectedCallback`],
+        },
+        {
+            fixtureName: 'light DOM',
+            tagName: 'x-light-container-multiple-conditionals',
+            ctor: LightContainerMultipleConditionals,
+            elseBlock: (currentLeafName) => [
+                'lightContainer:connectedCallback',
+                'lightSlot:connectedCallback',
+                `leaf:${currentLeafName}:connectedCallback`,
+            ],
+            ifBlock: (currentLeafName, previousLeafName) =>
+                ENABLE_NATIVE_CUSTOM_ELEMENT_LIFECYCLE
+                    ? [
+                          `leaf:${currentLeafName}:connectedCallback`,
+                          `leaf:${previousLeafName}:disconnectedCallback`,
+                          `leaf:${currentLeafName}:disconnectedCallback`,
+                      ]
+                    : [
+                          `leaf:${currentLeafName}:connectedCallback`,
+                          `leaf:${currentLeafName}:disconnectedCallback`,
+                      ],
+            elseIfBlock: (currentLeafName) => [
+                `leaf:${currentLeafName}:connectedCallback`,
+                `leaf:${currentLeafName}:disconnectedCallback`,
+            ],
+        },
+    ];
+
+    fixtures.forEach(({ fixtureName, tagName, ctor, ifBlock, elseBlock, elseIfBlock }) => {
+        // #TODO[3827]: These regression tests can be removed once the bug is resolved.
+        it(`${fixtureName} should maintain callback invocation order for duplicate slots across conditional branches when rerender triggered on conditional slot component`, async () => {
+            const container = createElement(tagName, {
+                is: ctor,
+            });
+            document.body.appendChild(container);
+
+            let currentLeafName = container.getLeaf().name;
+            expect(window.timingBuffer).toEqual(elseBlock(currentLeafName));
+
+            resetTimingBuffer();
+
+            const slotCmp = container.getSlotCmp();
+            // Note in synthetic shadow an error is thrown after rerender occurs,
+            // we capture this in the beforeEach and afterEach runs
+            slotCmp.showIf = true;
+            await Promise.resolve();
+
+            let previousLeafName = currentLeafName;
+            currentLeafName = container.getLeaf().name;
+            expect(window.timingBuffer).toEqual(ifBlock(currentLeafName, previousLeafName));
+
+            resetTimingBuffer();
+
+            // Note in synthetic shadow an error is thrown after rerender occurs,
+            // we capture this in the beforeEach and afterEach runs
+            slotCmp.showIf = false;
+            slotCmp.showElseIf = true;
+            await Promise.resolve();
+
+            previousLeafName = currentLeafName;
+            currentLeafName = container.getLeaf().name;
+            expect(window.timingBuffer).toEqual(elseIfBlock(currentLeafName, previousLeafName));
+        });
+    });
 });

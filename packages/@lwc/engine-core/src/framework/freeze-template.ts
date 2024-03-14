@@ -118,7 +118,7 @@ function warnOnArrayMutation(stylesheets: TemplateStylesheetFactories) {
         const originalArrayMethod = getOriginalArrayMethod(prop);
         stylesheets[prop] = function arrayMutationWarningWrapper() {
             reportTemplateViolation('stylesheets');
-            // @ts-ignore
+            // @ts-expect-error can't properly determine the right `this`
             return originalArrayMethod.apply(this, arguments);
         };
     }
@@ -215,7 +215,7 @@ function trackMutations(tmpl: Template) {
 
 function addLegacyStylesheetTokensShim(tmpl: Template) {
     // When ENABLE_FROZEN_TEMPLATE is false, then we shim stylesheetTokens on top of stylesheetToken for anyone who
-    // is accessing the old internal API (backwards compat). Details: https://salesforce.quip.com/v1rmAFu2cKAr
+    // is accessing the old internal API (backwards compat). Details: W-14210169
     defineProperty(tmpl, 'stylesheetTokens', {
         enumerable: true,
         configurable: true,
@@ -236,7 +236,7 @@ function addLegacyStylesheetTokensShim(tmpl: Template) {
             // If the value is null or some other exotic object, you would be broken anyway in the past
             // because the engine would try to access hostAttribute/shadowAttribute, which would throw an error.
             // However it may be undefined in newer versions of LWC, so we need to guard against that case.
-            this.stylesheetToken = isUndefined(value) ? undefined : (value as any).shadowAttribute;
+            this.stylesheetToken = isUndefined(value) ? undefined : value.shadowAttribute;
         },
     });
 }

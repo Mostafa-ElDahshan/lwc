@@ -5,13 +5,10 @@
  * For full license text, see the LICENSE file in the repo root or https://opensource.org/licenses/MIT
  */
 import {
-    ArrayUnshift,
     defineProperties,
     defineProperty,
     getOwnPropertyDescriptor,
-    hasNativeSymbolSupport,
     hasOwnProperty,
-    isFalse,
     isNull,
     isTrue,
     isUndefined,
@@ -42,11 +39,7 @@ import { isGlobalPatchingSkipped } from '../shared/utils';
 import { createStaticNodeList } from '../shared/static-node-list';
 import { getNodeNearestOwnerKey, getNodeOwnerKey, isNodeShadowed } from '../shared/node-ownership';
 
-import {
-    getShadowRoot,
-    getIE11FakeShadowRootPlaceholder,
-    isSyntheticShadowHost,
-} from './shadow-root';
+import { getShadowRoot, isSyntheticShadowHost } from './shadow-root';
 import {
     getNodeOwner,
     isSlotElement,
@@ -61,6 +54,7 @@ import {
  * based on the light-dom slotting mechanism. This applies to synthetic slot elements
  * and elements with shadow dom attached to them. It doesn't apply to native slot elements
  * because we don't want to patch the children getters for those elements.
+ * @param node
  */
 export function hasMountedChildren(node: Node): boolean {
     return isSyntheticSlotElement(node) || isSyntheticShadowHost(node);
@@ -70,7 +64,7 @@ function getShadowParent(node: Node, value: ParentNode & Node): (Node & ParentNo
     const owner = getNodeOwner(node);
     if (value === owner) {
         // walking up via parent chain might end up in the shadow root element
-        return getShadowRoot(owner!);
+        return getShadowRoot(owner);
     } else if (value instanceof Element) {
         if (getNodeNearestOwnerKey(node) === getNodeNearestOwnerKey(value)) {
             // the element and its parent node belong to the same shadow root
@@ -180,17 +174,6 @@ function childNodesGetterPatched(this: Node): NodeListOf<Node> {
     if (isSyntheticShadowHost(this)) {
         const owner = getNodeOwner(this);
         const childNodes = isNull(owner) ? [] : getAllMatches(owner, getFilteredChildNodes(this));
-        if (
-            process.env.NODE_ENV !== 'production' &&
-            isFalse(hasNativeSymbolSupport) &&
-            isExternalChildNodeAccessorFlagOn()
-        ) {
-            // inserting a comment node as the first childNode to trick the IE11
-            // DevTool to show the content of the shadowRoot, this should only happen
-            // in dev-mode and in IE11 (which we detect by looking at the symbol).
-            // Plus it should only be in place if we know it is an external invoker.
-            ArrayUnshift.call(childNodes, getIE11FakeShadowRootPlaceholder(this));
-        }
         return createStaticNodeList(childNodes);
     }
     // nothing to do here since this does not have a synthetic shadow attached to it
@@ -210,6 +193,7 @@ const getDocumentOrRootNode: (this: Node, options?: GetRootNodeOptions) => Node 
 )
     ? nativeGetRootNode
     : function (this: Node): Node {
+          // eslint-disable-next-line @typescript-eslint/no-this-alias
           let node = this;
           let nodeParent: Node | null;
           while (!isNull((nodeParent = parentNodeGetter.call(node)))) {
@@ -222,10 +206,10 @@ const getDocumentOrRootNode: (this: Node, options?: GetRootNodeOptions) => Node 
  * Get the shadow root
  * getNodeOwner() returns the host element that owns the given node
  * Note: getNodeOwner() returns null when running in native-shadow mode.
- *  Fallback to using the native getRootNode() to discover the root node.
- *  This is because, it is not possible to inspect the node and decide if it is part
- *  of a native shadow or the synthetic shadow.
- * @param {Node} node
+ * Fallback to using the native getRootNode() to discover the root node.
+ * This is because, it is not possible to inspect the node and decide if it is part
+ * of a native shadow or the synthetic shadow.
+ * @param node
  */
 function getNearestRoot(node: Node): Node {
     const ownerNode: HTMLElement | null = getNodeOwner(node);
@@ -246,17 +230,17 @@ function getNearestRoot(node: Node): Node {
  *
  * If looking for a shadow root of a node by calling `node.getRootNode({composed: false})` or `node.getRootNode()`,
  *
- *  1. Try to identify the host element that owns the give node.
- *     i. Identify the shadow tree that the node belongs to
- *     ii. If the node belongs to a shadow tree created by engine, return the shadowRoot of the host element that owns the shadow tree
- *  2. The host identification logic returns null in two cases:
- *     i. The node does not belong to a shadow tree created by engine
- *     ii. The engine is running in native shadow dom mode
- *     If so, use the original Node.prototype.getRootNode to fetch the root node(or manually climb up the dom tree where getRootNode() is unsupported)
+ * 1. Try to identify the host element that owns the give node.
+ * i. Identify the shadow tree that the node belongs to
+ * ii. If the node belongs to a shadow tree created by engine, return the shadowRoot of the host element that owns the shadow tree
+ * 2. The host identification logic returns null in two cases:
+ * i. The node does not belong to a shadow tree created by engine
+ * ii. The engine is running in native shadow dom mode
+ * If so, use the original Node.prototype.getRootNode to fetch the root node(or manually climb up the dom tree where getRootNode() is unsupported)
  *
  * _Spec_: https://dom.spec.whatwg.org/#dom-node-getrootnode
- *
- **/
+ * @param options
+ */
 function getRootNodePatched(this: Node, options?: GetRootNodeOptions): Node {
     const composed: boolean = isUndefined(options) ? false : !!options.composed;
     return isTrue(composed) ? getDocumentOrRootNode.call(this, options) : getNearestRoot(this);
@@ -427,40 +411,9 @@ defineProperties(Node.prototype, {
     },
 });
 
-let internalChildNodeAccessorFlag = false;
-
-/**
- * These 2 methods are providing a machinery to understand who is accessing the
- * .childNodes member property of a node. If it is used from inside the synthetic shadow
- * or from an external invoker. This helps to produce the right output in one very peculiar
- * case, the IE11 debugging comment for shadowRoot representation on the devtool.
- */
-export function isExternalChildNodeAccessorFlagOn(): boolean {
-    return !internalChildNodeAccessorFlag;
-}
-export const getInternalChildNodes: (node: Node) => NodeListOf<ChildNode> =
-    process.env.NODE_ENV !== 'production' && isFalse(hasNativeSymbolSupport)
-        ? function (node) {
-              internalChildNodeAccessorFlag = true;
-              let childNodes;
-              let error = null;
-              try {
-                  childNodes = node.childNodes;
-              } catch (e) {
-                  // childNodes accessor should never throw, but just in case!
-                  error = e;
-              } finally {
-                  internalChildNodeAccessorFlag = false;
-                  if (!isNull(error)) {
-                      // re-throwing after restoring the state machinery for setInternalChildNodeAccessorFlag
-                      throw error; // eslint-disable-line no-unsafe-finally
-                  }
-              }
-              return childNodes as NodeListOf<ChildNode>;
-          }
-        : function (node) {
-              return node.childNodes;
-          };
+export const getInternalChildNodes: (node: Node) => NodeListOf<ChildNode> = function (node) {
+    return node.childNodes;
+};
 
 // IE11 extra patches for wrong prototypes
 if (hasOwnProperty.call(HTMLElement.prototype, 'contains')) {

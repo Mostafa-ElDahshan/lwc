@@ -49,15 +49,22 @@ export interface VScopedSlotFragment extends BaseVNode {
     slotName: unknown;
 }
 
-export type VStaticElementData = Pick<VElementData, 'on' | 'ref'>;
+export interface VStaticPart {
+    readonly partId: number;
+    readonly data: VStaticPartData;
+    elm: Element | undefined;
+}
+export type VStaticPartData = Pick<VElementData, 'on' | 'ref'>;
 
 export interface VStatic extends BaseVNode {
     readonly type: VNodeType.Static;
     readonly sel: undefined;
     readonly key: Key;
     readonly fragment: Element;
-    readonly data: VStaticElementData | undefined;
+    readonly parts: VStaticPart[] | undefined;
     elm: Element | undefined;
+    // Corresponds to the slot attribute of the element and indicates which `slot` element it should be assigned to
+    slotAssignment: string | undefined;
 }
 
 export interface VFragment extends BaseVNode, BaseVParent {
@@ -69,8 +76,10 @@ export interface VFragment extends BaseVNode, BaseVParent {
 
     // which diffing strategy to use.
     stable: 0 | 1;
-    leading: VText;
-    trailing: VText;
+    // The leading and trailing nodes are text nodes when APIFeature.USE_COMMENTS_FOR_FRAGMENT_BOOKENDS
+    // is disabled and comment nodes when it is enabled.
+    leading: VText | VComment;
+    trailing: VText | VComment;
 }
 
 export interface VText extends BaseVNode {
@@ -92,6 +101,8 @@ export interface VBaseElement extends BaseVNode, BaseVParent {
     data: VElementData;
     elm: Element | undefined;
     key: Key;
+    // Corresponds to the slot attribute of the element and indicates which `slot` element it should be assigned to
+    slotAssignment: string | undefined;
 }
 
 export interface VElement extends VBaseElement {
@@ -119,7 +130,6 @@ export interface VNodeData {
     readonly on?: Readonly<Record<string, (event: Event) => any>>;
     readonly svg?: boolean;
     readonly renderer?: RendererAPI;
-    readonly spread?: Readonly<Record<string, any>>;
 }
 
 export interface VElementData extends VNodeData {
@@ -128,6 +138,8 @@ export interface VElementData extends VNodeData {
     readonly external?: boolean;
     readonly ref?: string;
     readonly slotData?: any;
+    // Corresponds to the slot attribute of the element and indicates which `slot` element it should be assigned to
+    readonly slotAssignment?: string;
 }
 
 export function isVBaseElement(vnode: VNode): vnode is VElement | VCustomElement {
@@ -149,4 +161,8 @@ export function isVFragment(vnode: VNode): vnode is VFragment {
 
 export function isVScopedSlotFragment(vnode: VNode): vnode is VScopedSlotFragment {
     return vnode.type === VNodeType.ScopedSlotFragment;
+}
+
+export function isVStatic(vnode: VNode): vnode is VStatic {
+    return vnode.type === VNodeType.Static;
 }
